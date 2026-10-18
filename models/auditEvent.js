@@ -1,0 +1,54 @@
+const mongoose = require("mongoose");
+
+const AUDIT_EVENT_TYPES = [
+  "auth.login.succeeded",
+  "auth.login.failed",
+  "auth.login.rejected_suspended",
+  "auth.login.rejected_deactivated",
+  "auth.login.temporary_password_expired",
+  "auth.logout",
+  "auth.password_changed",
+  "account.created",
+  "account.updated",
+  "account.status_changed",
+  "account.password_reset",
+  "session.revoked",
+  "session.idle_expired",
+  "session.absolute_expired",
+  "security.session_policy_updated",
+  "security.authorization_denied",
+  "company.profile_updated",
+];
+
+const auditEventSchema = new mongoose.Schema(
+  {
+    eventType: { type: String, enum: AUDIT_EVENT_TYPES, required: true },
+    outcome: {
+      type: String,
+      enum: ["success", "failure", "denied"],
+      required: true,
+    },
+    reason: { type: String, maxlength: 80 },
+    actorId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    actorName: { type: String, maxlength: 120 },
+    actorRoles: { type: [String], default: [] },
+    targetUserId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    targetName: { type: String, maxlength: 120 },
+    targetEmail: { type: String, maxlength: 254 },
+    sessionId: { type: mongoose.Schema.Types.ObjectId, ref: "Session", default: null },
+    ipAddress: { type: String, maxlength: 64 },
+    userAgent: { type: String, maxlength: 300 },
+    details: { type: mongoose.Schema.Types.Mixed, default: {} },
+    createdAt: { type: Date, required: true, default: Date.now },
+  },
+  { versionKey: false, strict: "throw" },
+);
+
+auditEventSchema.index({ createdAt: -1, _id: -1 });
+auditEventSchema.index({ targetUserId: 1, createdAt: -1, _id: -1 });
+auditEventSchema.index({ actorId: 1, createdAt: -1, _id: -1 });
+auditEventSchema.index({ eventType: 1, createdAt: -1, _id: -1 });
+
+module.exports =
+  mongoose.models.AuditEvent || mongoose.model("AuditEvent", auditEventSchema);
+module.exports.AUDIT_EVENT_TYPES = AUDIT_EVENT_TYPES;
