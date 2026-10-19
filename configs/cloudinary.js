@@ -18,6 +18,7 @@ function uploadImage(buffer, options = {}) {
         public_id: options.publicId,
         overwrite: false,
         resource_type: "image",
+        type: options.type || "upload",
         transformation: options.transformation || [{ quality: "auto", fetch_format: "auto" }],
       },
       (error, result) => {
@@ -32,9 +33,40 @@ function uploadImage(buffer, options = {}) {
   });
 }
 
-function deleteImage(publicId) {
-  if (!publicId) return Promise.resolve({ result: "not found" });
-  return cloudinary.uploader.destroy(publicId, { resource_type: "image" });
+function uploadPdf(buffer, options = {}) {
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
+    return Promise.reject(new TypeError("A PDF buffer is required."));
+  }
+
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      {
+        folder: options.folder || "anli/employee-documents",
+        public_id: options.publicId,
+        overwrite: false,
+        resource_type: "raw",
+        type: "authenticated",
+        format: "pdf",
+      },
+      (error, result) => {
+        if (error) return reject(error);
+        if (!result?.secure_url || !result?.public_id) {
+          return reject(new Error("Cloudinary returned an incomplete document result."));
+        }
+        return resolve({ url: result.secure_url, publicId: result.public_id });
+      },
+    );
+    stream.end(buffer);
+  });
 }
 
-module.exports = { cloudinary, uploadImage, deleteImage };
+function deleteAsset(publicId, resourceType = "image", type = "upload") {
+  if (!publicId) return Promise.resolve({ result: "not found" });
+  return cloudinary.uploader.destroy(publicId, { resource_type: resourceType, type });
+}
+
+function deleteImage(publicId) {
+  return deleteAsset(publicId, "image", "upload");
+}
+
+module.exports = { cloudinary, uploadImage, uploadPdf, deleteAsset, deleteImage };

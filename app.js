@@ -9,6 +9,9 @@ const securitySettingsRoutes = require("./routes/securitySettings");
 const userRoutes = require("./routes/users");
 const auditRoutes = require("./routes/audit");
 const profileSettingsRoutes = require("./routes/profileSettings");
+const employeeRoutes = require("./routes/employees");
+const attendanceRoutes = require("./routes/attendance");
+const salaryAdvanceRoutes = require("./routes/salaryAdvances");
 
 function createApp(config) {
   const app = express();
@@ -55,6 +58,9 @@ function createApp(config) {
   app.use("/api/users", userRoutes);
   app.use("/api/audit", auditRoutes);
   app.use("/api/profile-settings", profileSettingsRoutes);
+  app.use("/api/employees", employeeRoutes);
+  app.use("/api/attendance", attendanceRoutes);
+  app.use("/api/salary-advances", salaryAdvanceRoutes);
 
   app.use((error, _request, response, _next) => {
     if (response.headersSent) return;
