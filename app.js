@@ -14,6 +14,7 @@ const attendanceRoutes = require("./routes/attendance");
 const salaryAdvanceRoutes = require("./routes/salaryAdvances");
 const leaveRoutes = require("./routes/leave");
 const disciplinaryRoutes = require("./routes/disciplinary");
+const productionRoutes = require("./routes/production");
 
 function createApp(config) {
   const app = express();
@@ -65,6 +66,7 @@ function createApp(config) {
   app.use("/api/salary-advances", salaryAdvanceRoutes);
   app.use("/api/leave", leaveRoutes);
   app.use("/api/disciplinary-cases", disciplinaryRoutes);
+  app.use("/api/production", productionRoutes);
 
   app.use((error, _request, response, _next) => {
     if (response.headersSent) return;

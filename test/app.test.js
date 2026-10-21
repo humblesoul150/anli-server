@@ -176,6 +176,31 @@ test("salary advance reads and mutations reject unauthenticated requests", async
       headers: ["POST", "PUT"].includes(method) ? { "Content-Type": "application/json" } : undefined,
       body: ["POST", "PUT"].includes(method) ? "{}" : undefined,
     });
+
+    assert.equal(response.status, 401, `${method} ${path}`);
+  }
+});
+
+test("production catalog and stock routes reject unauthenticated requests", async () => {
+  const requests = [
+    ["/api/production/products", "GET"],
+    ["/api/production/products", "POST"],
+    ["/api/production/products/507f1f77bcf86cd799439011", "PATCH"],
+    ["/api/production/products/507f1f77bcf86cd799439011/recipe", "PUT"],
+    ["/api/production/materials", "GET"],
+    ["/api/production/materials", "POST"],
+    ["/api/production/stock/balances", "GET"],
+    ["/api/production/stock/finished/receipts", "POST"],
+    ["/api/production/stock/finished/adjustments", "POST"],
+    ["/api/production/runs", "GET"],
+    ["/api/production/runs", "POST"],
+  ];
+  for (const [path, method] of requests) {
+    const response = await fetch(`${baseUrl}${path}`, {
+      method,
+      headers: ["POST", "PUT", "PATCH"].includes(method) ? { "Content-Type": "application/json" } : undefined,
+      body: ["POST", "PUT", "PATCH"].includes(method) ? "{}" : undefined,
+    });
     assert.equal(response.status, 401, `${method} ${path}`);
   }
 });

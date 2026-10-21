@@ -136,6 +136,42 @@ Employee response requirements and calendar-day response windows are configurabl
 
 Case changes and audit events are committed together in MongoDB transactions. All endpoints require an authenticated session with the temporary-password change completed. Employee case access is scoped to the employee profile linked to the signed-in account; manager access is scoped to their assigned cases. Automatic notification delivery, employment termination actions, and payroll changes are intentionally outside this workflow.
 
+## Production, products, and inventory
+
+Production catalog and inventory records are MongoDB-backed. All routes require an authenticated session with the temporary-password change completed and one of Super Admin, Admin, General Manager, Production Manager, or Inventory Manager. Product and ingredient creation, product edits, receipts, adjustments, and production posting are audited.
+
+Finished-goods inventory is stored as whole sellable pieces. Product profiles define a millilitre sellable unit and may define an outer `Box` or `Carton`, a positive whole `piecesPerPack`, and a positive `packWeightKg` for net product weight per outer pack. Stock APIs accept piece quantities; clients may calculate pack equivalents for display. Product sellable units cannot be changed after stock or production history exists.
+
+Products own versioned recipes, but raw-material catalog items are shared across products. Each recipe contains only the ingredients used by that product; `quantityPerTank` is expressed in the referenced material's base unit for one 1,000-litre tank. Recipe changes create immutable versions. Raw materials are created and stocked only in Raw Material Management; product recipes select from that shared catalog.
+
+- `GET /api/production/products` returns product profiles, active recipes, and current piece balances. Product create/update and recipe endpoints accept ingredient entries referencing shared `materialId` records with `quantityPerTank`; inline material creation is not supported.
+- `PUT /api/production/products/:id/recipe` creates a new immutable recipe version. Sending an empty array clears the active recipe without deleting prior versions.
+- `GET /api/production/materials` lists the shared catalog and per-location balances. `POST /api/production/materials` creates a zero-stock material. Receipts, adjustments, and transfers are append-only movements. `PUT /api/production/materials/:materialId/locations/:location` configures a location's reorder threshold and responsible user. `GET /api/production/materials/low-stock` returns notification-ready alert records; notification delivery is not enabled.
+- `GET /api/production/materials/receipts` lists stock-in history. `GET /api/production/materials/movements` reads the movement ledger. `GET /api/production/materials/responsible-users` returns eligible inventory owners.
+- `GET /api/production/materials/production-usages` lists daily material-use records. `POST /api/production/materials/production-usages` records use separately against a finished-goods run, deriving the ingredient totals on the server as `quantityPerTank × tanksProduced`. The use record snapshots its recipe and tank count and updates the selected location's inventory in the same transaction.
+- `GET /api/production/stock/balances` returns finished-goods and raw-material balances. `GET /api/production/stock/finished/movements` reads the finished-goods movement ledger. `POST /api/production/stock/finished/receipts` records stock receipts; `POST /api/production/stock/finished/adjustments` records reason-coded increases or decreases. Movements are append-only and requests may supply an `idempotencyKey`.
+- `GET /api/production/runs` reads production history. `POST /api/production/runs` accepts `productId`, `productionDate`, `openingStockPieces`, `salesQuantityPieces`, `damagedQuantityPieces`, `closingStockPieces`, optional `damageReason`, and optional `idempotencyKey`. Production is calculated as closing + sales + damage − opening. It posts finished-goods production/sales/damage movements. Raw-material consumption is a separate linked posting via the production-usages endpoint, preventing duplicate deductions. No stock can fall below zero; one regular run is permitted per product/date.
+
+The current Production Management client records sales quantities manually on daily production runs, and those quantities are posted as finished-stock dispatches. The Sales workflow is not connected to these APIs in this scope. Future Sales integration should reference product IDs and post its dispatch through the same stock ledger in the sale transaction; it must not also enter the same sale quantity on the daily run.
+
+### Legacy raw-material migration
+
+Use **Export legacy data** in Raw Material Management to download the browser-local catalog, movement history, recipes, and production records for reconciliation. The migration script imports the legacy material catalog and movements, reconciles imported balances to the exported current quantities, converts old recipe ingredient fields to the 1,000-litre `quantityPerTank` basis, and replaces the old material-only balance index with a unique material/location index. Historical production-run snapshots are retained unchanged.
+
+Run the dry-run first; it makes no database changes and reports catalog conflicts, pre-existing backend balances/history, and any opening/closing balancing entries required:
+
+```powershell
+npm run migrate:raw-materials -- C:\path\to\legacy-raw-material-migration.json
+```
+
+Resolve all catalog conflicts and manually reconcile any non-empty backend inventory before applying. If the dry-run reports balance differences, review the proposed entries and explicitly confirm them with `--accept-reconciliation`. Applying requires an active Super Admin, Admin, or Inventory Manager account ID and a MongoDB replica set/sharded cluster (the migration is transactional):
+
+```powershell
+npm run migrate:raw-materials -- C:\path\to\legacy-raw-material-migration.json --apply --actor=<user-id> --accept-reconciliation
+```
+
+Omit `--accept-reconciliation` when the dry-run reports no balance differences. The operation is protected against rerunning the same export and writes an audit event. Back up the database and retain the export/report before applying in production.
+
 ## Tests
 
 Run `npm test` from this directory.
