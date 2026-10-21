@@ -36,6 +36,8 @@ const STRING_LIMITS = {
 };
 const PROFILE_FIELDS = new Set([
   ...Object.keys(STRING_LIMITS),
+  "userId",
+  "supervisorUserId",
   "dateOfBirth",
   "childrenCount",
   "salary",
@@ -67,6 +69,8 @@ const MANAGER_HIDDEN_FIELDS = [
   "nextOfKinRelationship",
   "nextOfKinPhone",
   "nextOfKinAddress",
+  "userId",
+  "supervisorUserId",
   "documents",
 ];
 
@@ -106,6 +110,16 @@ function validateEmployeeInput(body, { partial = false, allowNumber = false } = 
 
   const value = {};
   for (const [field, item] of Object.entries(body)) {
+    if (field === "userId" || field === "supervisorUserId") {
+      if (item === null || item === "") {
+        value[field] = null;
+      } else if (typeof item !== "string" || !mongoose.isValidObjectId(item)) {
+        return { error: `${field} must be a valid user ID or null.` };
+      } else {
+        value[field] = new mongoose.Types.ObjectId(item);
+      }
+      continue;
+    }
     if (field === "mother" || field === "father") {
       const parent = validateParent(item, field);
       if (parent.error) return parent;
@@ -243,9 +257,29 @@ async function getEmployee(request, response) {
   });
 }
 
+async function validateEmployeeUserLinks(value, employeeId) {
+  const User = require("../models/user");
+  for (const field of ["userId", "supervisorUserId"]) {
+    if (!(field in value) || value[field] === null) continue;
+    const user = await User.findById(value[field]).select("_id status");
+    if (!user || user.status !== "Active") {
+      return `${field} must reference an active user account.`;
+    }
+    if (field === "userId") {
+      const filter = { userId: value[field] };
+      if (employeeId) filter._id = { $ne: employeeId };
+      const existing = await Employee.findOne(filter).select("_id");
+      if (existing) return "A login account can be linked to only one employee profile.";
+    }
+  }
+  return "";
+}
+
 async function createEmployee(request, response) {
   const { value, error } = validateEmployeeInput(request.body);
   if (error) return response.status(400).json({ error });
+  const linkedUserError = await validateEmployeeUserLinks(value);
+  if (linkedUserError) return response.status(400).json({ error: linkedUserError });
   const employeeNumber = `EMP-${randomUUID().replaceAll("-", "").slice(0, 10).toUpperCase()}`;
   const employee = new Employee({
     ...value,
@@ -267,6 +301,8 @@ async function updateEmployee(request, response) {
   if (!validObjectId(request.params.id)) return response.status(400).json({ error: "Invalid employee ID." });
   const { value, error } = validateEmployeeInput(request.body, { partial: true });
   if (error) return response.status(400).json({ error });
+  const linkedUserError = await validateEmployeeUserLinks(value, request.params.id);
+  if (linkedUserError) return response.status(400).json({ error: linkedUserError });
   if (!Object.keys(value).length) return response.status(400).json({ error: "Provide at least one employee field to update." });
   const employee = await Employee.findById(request.params.id);
   if (!employee) return response.status(404).json({ error: "Employee not found." });

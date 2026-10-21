@@ -110,6 +110,53 @@ test("attendance reads and daily saves reject unauthenticated requests", async (
   }
 });
 
+test("leave routes reject unauthenticated reads and mutations", async () => {
+  const requests = [
+    ["/api/leave", "GET"],
+    ["/api/leave", "POST"],
+    ["/api/leave/policy", "GET"],
+    ["/api/leave/policy", "PUT"],
+    ["/api/leave/people", "GET"],
+    ["/api/leave/people/507f1f77bcf86cd799439011/routing", "PUT"],
+    ["/api/leave/legacy-archive", "GET"],
+    ["/api/leave/legacy-import/preview", "POST"],
+    ["/api/leave/legacy-import", "POST"],
+    ["/api/leave/balances", "GET"],
+    ["/api/leave/reminder-candidates", "GET"],
+    ["/api/leave/507f1f77bcf86cd799439011/decision", "POST"],
+    ["/api/leave/507f1f77bcf86cd799439011/cancel", "POST"],
+  ];
+  for (const [path, method] of requests) {
+    const response = await fetch(`${baseUrl}${path}`, {
+      method,
+      headers: ["POST", "PUT"].includes(method) ? { "Content-Type": "application/json" } : undefined,
+      body: ["POST", "PUT"].includes(method) ? "{}" : undefined,
+    });
+    assert.equal(response.status, 401, `${method} ${path}`);
+  }
+});
+
+test("disciplinary routes reject unauthenticated reads and mutations", async () => {
+  const requests = [
+    ["/api/disciplinary-cases", "GET"],
+    ["/api/disciplinary-cases", "POST"],
+    ["/api/disciplinary-cases/policy", "GET"],
+    ["/api/disciplinary-cases/policy", "PUT"],
+    ["/api/disciplinary-cases/approvers", "GET"],
+    ["/api/disciplinary-cases/employee-indicators", "GET"],
+    ["/api/disciplinary-cases/my-cases", "GET"],
+    ["/api/disciplinary-cases/507f1f77bcf86cd799439011/submit", "POST"],
+  ];
+  for (const [path, method] of requests) {
+    const response = await fetch(`${baseUrl}${path}`, {
+      method,
+      headers: ["POST", "PUT"].includes(method) ? { "Content-Type": "application/json" } : undefined,
+      body: ["POST", "PUT"].includes(method) ? "{}" : undefined,
+    });
+    assert.equal(response.status, 401, `${method} ${path}`);
+  }
+});
+
 test("salary advance reads and mutations reject unauthenticated requests", async () => {
   const requests = [
     ["/api/salary-advances", "GET"],

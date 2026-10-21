@@ -31,7 +31,7 @@ test("employee schema keeps HR data separate from account credentials and stores
   });
   assert.equal(employee.image.url, "https://cdn.example/profile.png");
   assert.equal(employee.image.publicId, "employee/profile");
-  assert.equal(employee.userId, undefined);
+  assert.equal(employee.userId, null);
   assert.equal(employee.password, undefined);
   assert.equal(employee.documents.length, 0);
   assert.equal(Employee.schema.path("number").options.immutable, true);
@@ -74,6 +74,8 @@ test("general manager projection omits sensitive fields and document identifiers
     _id: "507f1f77bcf86cd799439011",
     number: "EMP-1",
     name: "Jane Doe",
+    userId: "507f1f77bcf86cd799439012",
+    supervisorUserId: "507f1f77bcf86cd799439013",
     salary: 2500000,
     nssfNumber: "private",
     mother: { name: "Parent" },
@@ -85,6 +87,8 @@ test("general manager projection omits sensitive fields and document identifiers
   assert.equal(result.nssfNumber, undefined);
   assert.equal(result.mother, undefined);
   assert.equal(result.documents, undefined);
+  assert.equal(result.userId, undefined);
+  assert.equal(result.supervisorUserId, undefined);
   assert.equal(result.image.url, "https://cdn.example/image.png");
 });
 

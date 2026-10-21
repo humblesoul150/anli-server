@@ -68,9 +68,23 @@ After authentication and the required first password change, only Human Resource
 - `GET /api/attendance?month=YYYY-MM&employeeId=<optional>` returns records for one calendar month, optionally filtered to one employee.
 - `PUT /api/attendance/daily/YYYY-MM-DD` saves a batch with `{ "entries": [{ "employeeId": "...", "status": "Present|Absent|On leave|Unmarked", "halfDay": false, "late": false, "note": "" }] }`. Batches accept 1–500 distinct employees. Half-day and late are valid only for Present records.
 
-Daily saves and their audit events commit together in a MongoDB transaction. Saves are retry-safe, validate employee references, and allow new entries only for active employees. Existing historical records can still be corrected after an employee is deactivated. Recording, correction, and removal are written to the security audit stream without including attendance notes. Monthly reads are capped at 20,000 records and return an explicit error if exceeded. Leave-request synchronization and payroll calculations are not part of the current API.
+Daily saves and their audit events commit together in a MongoDB transaction. Saves are retry-safe, validate employee references, and allow new entries only for active employees. Existing historical records can still be corrected after an employee is deactivated. Recording, correction, and removal are written to the security audit stream without including attendance notes. Monthly reads are capped at 20,000 records and return an explicit error if exceeded.
 
 Pre-existing browser-local attendance is not imported; the client archives that old snapshot locally and displays only server-backed attendance.
+
+## Leave management
+
+Leave requests, review decisions, amendments, cancellations, return confirmation, balances, policy, and reminder candidates are stored or computed by the API. Notifications are not delivered; reminder endpoints return candidates for a later notification workflow. All leave routes require authentication and completion of a required password change.
+
+- `GET /api/leave` lists leave requests visible to the caller; `POST /api/leave` submits a request for the linked employee account.
+- `POST /api/leave/:id/decision` records an approval or rejection. `POST /api/leave/:id/amendments` requests a change to approved dates, followed by `POST /api/leave/:id/amendments/:amendmentId/decision`.
+- `POST /api/leave/:id/cancel` cancels a request under HR/Admin authorization; `POST /api/leave/:id/return-confirmation` records the actual return date.
+- `GET /api/leave/policy` reads configurable workdays (Monday–Saturday by default), holidays, leave-year start, entitlements, carryover settings, and reminder thresholds. `PUT /api/leave/policy` is Super Admin-only.
+- `GET /api/leave/balances` and `GET /api/leave/reminder-candidates` return current computed balances and due reminder candidates; neither sends notifications.
+- HR/Admin roles can use `GET /api/leave/people` and `PUT /api/leave/people/:employeeId/routing` to link active employee profiles to login accounts and assign an incharge. HR is the approval fallback when no incharge is assigned.
+- HR/Admin roles can preview and import legacy browser requests with `POST /api/leave/legacy-import/preview` and `POST /api/leave/legacy-import`; imported records are retained in a separate read-only archive at `GET /api/leave/legacy-archive`. Legacy decisions are explicitly unverified and never count as approved leave or balances. The local browser snapshot remains intact.
+
+Leave changes are recorded in the audit stream. Handover assignment is recorded on a request; it does not grant the selected employee access to the absent employee's account or role. Temporary delegated business permissions require separate authorization support and must not be treated as active where the underlying business routes do not enforce them.
 
 ## Employee profiles
 
@@ -105,6 +119,22 @@ Salary advances are persisted in MongoDB and require two distinct approvals in o
 - `POST /api/salary-advances/legacy-import/preview` validates up to 500 locally archived records and reports duplicates and employee matches. `POST /api/salary-advances/legacy-import` imports validated records idempotently. Legacy approvals are stored as unverified archive data—not real decisions—and do not enable disbursement or repayment; local attachment data is not migrated.
 
 Approval, disbursement, repayment, import, and attachment events are written to the audit stream. State changes use MongoDB transactions, so the deployment must support transactions (a replica set or sharded cluster).
+
+## Disciplinary cases
+
+Disciplinary cases are confidential backend records. Only Human Resource can create and edit pre-approval cases. Approvals are sequential and require three distinct active accounts: the assigned Human Resource reviewer, General Manager, and Super Admin (acting as Director). The case creator cannot be an approver. A letter cannot be issued until all three stages approve the current version; issued letter content is immutable.
+
+Employee response requirements and calendar-day response windows are configurable for each letter type and may be overridden per case. A required response (or a factual HR record that the response window expired) must be recorded before approval. Non-response is not treated as an admission. No notification delivery is triggered by these endpoints.
+
+- `GET /api/disciplinary-cases` lists cases for HR; assigned approvers see only cases assigned to their account. Optional `employeeId`, `status`, and `type` filters are supported. `GET /api/disciplinary-cases/:caseId` reads an authorized case.
+- `POST /api/disciplinary-cases` creates an HR draft; `PATCH /api/disciplinary-cases/:caseId` edits pre-approval content. Substantive edits after a response reset the response window and require a fresh response.
+- `GET /api/disciplinary-cases/approvers` returns minimal active reviewer choices to HR. `GET /api/disciplinary-cases/policy` reads response rules; only Super Admin can update them with `PUT`.
+- `POST /api/disciplinary-cases/:caseId/response-request` opens the employee response window. Employees use `GET /api/disciplinary-cases/my-cases`, `POST /api/disciplinary-cases/my-cases/:caseId/responses`, and `POST /api/disciplinary-cases/my-cases/:caseId/acknowledgements` or `/appeals`. HR can record an offline response with `/response-record` or an expired window with `/no-response`.
+- HR submits a completed case with `POST /api/disciplinary-cases/:caseId/submit`. The assigned reviewer at the current stage records `Approved` or `Rejected` at `/approvals`; HR can issue an all-approved letter at `/issue`. HR or Super Admin can resolve an appeal; only Super Admin can rescind an issued letter.
+- HR can upload PDF evidence to `POST /api/disciplinary-cases/:caseId/evidence` (multipart field `file`, signature-validated, up to 10 MB, at most 10 files per case) and remove it before approval. Authorized assigned readers download through `/evidence/:evidenceId/download`, which returns a two-minute private URL; stored Cloudinary URLs and public IDs are never serialized.
+- `GET /api/disciplinary-cases/employee-indicators` returns minimal indicators for authorized disciplinary readers: outlined flag for an active written warning, filled flag during an effective suspension, and user-X for a termination on/after its effective date. These indicators do not change employee status, payroll, or employment records.
+
+Case changes and audit events are committed together in MongoDB transactions. All endpoints require an authenticated session with the temporary-password change completed. Employee case access is scoped to the employee profile linked to the signed-in account; manager access is scoped to their assigned cases. Automatic notification delivery, employment termination actions, and payroll changes are intentionally outside this workflow.
 
 ## Tests
 

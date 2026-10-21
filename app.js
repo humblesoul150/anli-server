@@ -12,6 +12,8 @@ const profileSettingsRoutes = require("./routes/profileSettings");
 const employeeRoutes = require("./routes/employees");
 const attendanceRoutes = require("./routes/attendance");
 const salaryAdvanceRoutes = require("./routes/salaryAdvances");
+const leaveRoutes = require("./routes/leave");
+const disciplinaryRoutes = require("./routes/disciplinary");
 
 function createApp(config) {
   const app = express();
@@ -61,6 +63,8 @@ function createApp(config) {
   app.use("/api/employees", employeeRoutes);
   app.use("/api/attendance", attendanceRoutes);
   app.use("/api/salary-advances", salaryAdvanceRoutes);
+  app.use("/api/leave", leaveRoutes);
+  app.use("/api/disciplinary-cases", disciplinaryRoutes);
 
   app.use((error, _request, response, _next) => {
     if (response.headersSent) return;

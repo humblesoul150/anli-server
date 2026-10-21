@@ -42,6 +42,9 @@ const employeeSchema = new mongoose.Schema(
       maxlength: 40,
     },
     migrationKey: { type: String, select: false, unique: true, sparse: true },
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    supervisorUserId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    leaveRequestVersion: { type: Number, default: 0, select: false },
     name: { type: String, required: true, trim: true, maxlength: 180 },
     firstName: { type: String, trim: true, maxlength: 80, default: "" },
     secondName: { type: String, trim: true, maxlength: 80, default: "" },
@@ -112,6 +115,10 @@ const employeeSchema = new mongoose.Schema(
 
 employeeSchema.index({ department: 1, status: 1 });
 employeeSchema.index({ name: 1 });
+employeeSchema.index(
+  { userId: 1 },
+  { unique: true, partialFilterExpression: { userId: { $type: "objectId" } } },
+);
 
 module.exports =
   mongoose.models.Employee || mongoose.model("Employee", employeeSchema);
