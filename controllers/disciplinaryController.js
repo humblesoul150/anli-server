@@ -6,6 +6,7 @@ const Employee = require("../models/employee");
 const User = require("../models/user");
 const audit = require("../lib/audit");
 const { cloudinary, uploadPdf, deleteAsset } = require("../configs/cloudinary");
+const { hasAnyDepartmentRole } = require("../lib/authorization");
 
 const LETTER_TYPES = ["Written warning", "Suspension", "Termination"];
 const APPROVAL_STAGES = ["Human Resource", "General Manager", "Super Admin"];
@@ -51,11 +52,11 @@ const DEFAULT_RESPONSE_RULES = Object.freeze({
 });
 
 function isHr(user) {
-  return Boolean(user?.roles?.includes("Human Resource"));
+  return hasAnyDepartmentRole(user, ["Human Resource"]);
 }
 
 function hasDisciplinaryRole(user) {
-  return Boolean(user?.roles?.some((role) => ["Human Resource", "General Manager", "Super Admin"].includes(role)));
+  return hasAnyDepartmentRole(user, ["Human Resource", "General Manager"]);
 }
 
 function isValidDate(value) {
@@ -671,7 +672,8 @@ async function decideApproval(request, response) {
   if (!caseRecord) return response.status(404).json({ error: "Disciplinary case not found." });
   const stage = currentApprovalStage(caseRecord.status);
   if (!stage) return response.status(409).json({ error: "This case is not awaiting approval." });
-  if (!request.authUser.roles.includes(stage) || String(assignedReviewer(caseRecord, stage)) !== String(request.authUser._id)) {
+  const isSuperAdmin = request.authUser.roles.includes("Super Admin");
+  if ((!hasAnyDepartmentRole(request.authUser, [stage]) || !isSuperAdmin && String(assignedReviewer(caseRecord, stage)) !== String(request.authUser._id))) {
     return deny(request, response, "disciplinary_assigned_approver_required", "disciplinary.cases.approvals");
   }
   if (String(caseRecord.createdBy) === String(request.authUser._id)) {

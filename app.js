@@ -15,6 +15,14 @@ const salaryAdvanceRoutes = require("./routes/salaryAdvances");
 const leaveRoutes = require("./routes/leave");
 const disciplinaryRoutes = require("./routes/disciplinary");
 const productionRoutes = require("./routes/production");
+const assetRoutes = require("./routes/assets");
+const payrollRoutes = require("./routes/payroll");
+const expenseRoutes = require("./routes/expenses");
+const customerRoutes = require("./routes/customers");
+const salesRoutes = require("./routes/sales");
+const receiptRoutes = require("./routes/receipts");
+const orderRoutes = require("./routes/orders");
+const notificationRoutes = require("./routes/notifications");
 
 function createApp(config) {
   const app = express();
@@ -67,6 +75,14 @@ function createApp(config) {
   app.use("/api/leave", leaveRoutes);
   app.use("/api/disciplinary-cases", disciplinaryRoutes);
   app.use("/api/production", productionRoutes);
+  app.use("/api/assets", assetRoutes);
+  app.use("/api/payroll", payrollRoutes);
+  app.use("/api/expenses", expenseRoutes);
+  app.use("/api/customers", customerRoutes);
+  app.use("/api/sales", salesRoutes);
+  app.use("/api/receipts", receiptRoutes);
+  app.use("/api/orders", orderRoutes);
+  app.use("/api/notifications", notificationRoutes);
 
   app.use((error, _request, response, _next) => {
     if (response.headersSent) return;

@@ -10,6 +10,7 @@ const finishedProductSchema = new mongoose.Schema(
     packType: { type: String, enum: ["Box", "Carton"] },
     piecesPerPack: { type: Number, min: 1, validate: Number.isInteger },
     packWeightKg: { type: Number, min: 0.000001 },
+    price: { type: Number, min: 1, validate: Number.isInteger },
     recipeRequired: { type: Boolean, default: false },
     active: { type: Boolean, default: true, index: true },
     activeRecipeId: { type: mongoose.Schema.Types.ObjectId, ref: "ProductionRecipe", default: null },

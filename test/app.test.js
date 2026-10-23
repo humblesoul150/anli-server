@@ -27,6 +27,44 @@ test("health endpoint remains available", async () => {
   assert.equal((await response.json()).status, "OK");
 });
 
+test("order reads and mutations reject unauthenticated requests", async () => {
+  const requests = [
+    ["/api/orders", "GET"],
+    ["/api/orders", "POST"],
+    ["/api/orders/507f1f77bcf86cd799439011", "GET"],
+    ["/api/orders/507f1f77bcf86cd799439011/confirm", "POST"],
+    ["/api/orders/507f1f77bcf86cd799439011/payments", "POST"],
+    ["/api/orders/507f1f77bcf86cd799439011/fulfill", "POST"],
+    ["/api/orders/legacy-import", "POST"],
+  ];
+  for (const [path, method] of requests) {
+    const response = await fetch(`${baseUrl}${path}`, {
+      method,
+      headers: method === "POST" ? { "Content-Type": "application/json" } : undefined,
+      body: method === "POST" ? "{}" : undefined,
+    });
+
+    test("receipt register and management actions reject unauthenticated requests", async () => {
+      const requests = [
+        ["/api/receipts/sales", "GET"],
+        ["/api/receipts/credit-payments", "GET"],
+        ["/api/receipts/sales/507f1f77bcf86cd799439011/favorite", "PATCH"],
+        ["/api/receipts/credit-payments/507f1f77bcf86cd799439011/archive", "PATCH"],
+        ["/api/receipts/bulk-export", "POST"],
+      ];
+      for (const [path, method] of requests) {
+        const response = await fetch(`${baseUrl}${path}`, {
+          method,
+          headers: ["PATCH", "POST"].includes(method) ? { "Content-Type": "application/json" } : undefined,
+          body: ["PATCH", "POST"].includes(method) ? "{}" : undefined,
+        });
+        assert.equal(response.status, 401, `${method} ${path}`);
+      }
+    });
+    assert.equal(response.status, 401, `${method} ${path}`);
+  }
+});
+
 test("user directory rejects unauthenticated requests", async () => {
   const response = await fetch(`${baseUrl}/api/users`);
   assert.equal(response.status, 401);
@@ -110,6 +148,92 @@ test("attendance reads and daily saves reject unauthenticated requests", async (
   }
 });
 
+test("asset reads and mutations reject unauthenticated requests", async () => {
+  const requests = [
+    ["/api/assets", "GET"],
+    ["/api/assets?limit=1", "GET"],
+    ["/api/assets/507f1f77bcf86cd799439011", "GET"],
+    ["/api/assets", "POST"],
+    ["/api/assets/import", "POST"],
+    ["/api/assets/507f1f77bcf86cd799439011", "PATCH"],
+    ["/api/assets/507f1f77bcf86cd799439011/events", "POST"],
+    ["/api/assets/507f1f77bcf86cd799439011/photos", "POST"],
+    ["/api/assets/507f1f77bcf86cd799439011/photos/photo", "DELETE"],
+  ];
+  for (const [path, method] of requests) {
+    const response = await fetch(`${baseUrl}${path}`, {
+      method,
+      headers: ["POST", "PATCH"].includes(method) ? { "Content-Type": "application/json" } : undefined,
+      body: ["POST", "PATCH"].includes(method) ? "{}" : undefined,
+    });
+
+    assert.equal(response.status, 401, `${method} ${path}`);
+  }
+});
+
+test("expense reads, decisions, payments, receipts, and imports reject unauthenticated requests", async () => {
+  const requests = [
+    ["/api/expenses", "GET"],
+    ["/api/expenses", "POST"],
+    ["/api/expenses/legacy-import", "POST"],
+    ["/api/expenses/507f1f77bcf86cd799439011", "GET"],
+    ["/api/expenses/507f1f77bcf86cd799439011/decision", "POST"],
+    ["/api/expenses/507f1f77bcf86cd799439011/payments", "POST"],
+    ["/api/expenses/507f1f77bcf86cd799439011/attachments", "POST"],
+    ["/api/expenses/507f1f77bcf86cd799439011/attachments/attachment-id", "DELETE"],
+  ];
+  for (const [path, method] of requests) {
+    const response = await fetch(`${baseUrl}${path}`, {
+      method,
+      headers: ["POST", "PUT", "PATCH"].includes(method) ? { "Content-Type": "application/json" } : undefined,
+      body: ["POST", "PUT", "PATCH"].includes(method) ? "{}" : undefined,
+    });
+
+    test("sales, sale details, and sale payments reject unauthenticated requests", async () => {
+      const requests = [
+        ["/api/sales", "GET"],
+        ["/api/sales", "POST"],
+        ["/api/sales/507f1f77bcf86cd799439011", "GET"],
+        ["/api/sales/507f1f77bcf86cd799439011/payments", "POST"],
+        ["/api/sales/507f1f77bcf86cd799439011/credit", "PATCH"],
+        ["/api/sales/credit-customers/C-100/statement", "GET"],
+        ["/api/notifications", "GET"],
+      ];
+      for (const [path, method] of requests) {
+        const response = await fetch(`${baseUrl}${path}`, {
+          method,
+          headers: method === "POST" ? { "Content-Type": "application/json" } : undefined,
+          body: method === "POST" ? "{}" : undefined,
+        });
+        assert.equal(response.status, 401, `${method} ${path}`);
+      }
+    });
+
+    assert.equal(response.status, 401, `${method} ${path}`);
+  }
+});
+
+test("customer reads, mutations, and legacy imports reject unauthenticated requests", async () => {
+  const requests = [
+    ["/api/customers", "GET"],
+    ["/api/customers", "POST"],
+    ["/api/customers/legacy-import", "POST"],
+    ["/api/customers/C-001", "GET"],
+    ["/api/customers/C-001", "PUT"],
+    ["/api/customers/C-001/status", "PATCH"],
+    ["/api/customers/C-001/archive", "POST"],
+    ["/api/customers/C-001/restore", "POST"],
+  ];
+  for (const [path, method] of requests) {
+    const response = await fetch(`${baseUrl}${path}`, {
+      method,
+      headers: ["POST", "PUT", "PATCH"].includes(method) ? { "Content-Type": "application/json" } : undefined,
+      body: ["POST", "PUT", "PATCH"].includes(method) ? "{}" : undefined,
+    });
+    assert.equal(response.status, 401, `${method} ${path}`);
+  }
+});
+
 test("leave routes reject unauthenticated reads and mutations", async () => {
   const requests = [
     ["/api/leave", "GET"],
@@ -175,6 +299,31 @@ test("salary advance reads and mutations reject unauthenticated requests", async
       method,
       headers: ["POST", "PUT"].includes(method) ? { "Content-Type": "application/json" } : undefined,
       body: ["POST", "PUT"].includes(method) ? "{}" : undefined,
+    });
+
+    test("payroll APIs reject unauthenticated requests", async () => {
+      const requests = [
+        ["/api/payroll/policy", "GET"],
+        ["/api/payroll/policy", "PUT"],
+        ["/api/payroll/runs", "GET"],
+        ["/api/payroll/runs", "POST"],
+        ["/api/payroll/runs/507f1f77bcf86cd799439011", "GET"],
+        ["/api/payroll/runs/507f1f77bcf86cd799439011/submit", "POST"],
+        ["/api/payroll/runs/507f1f77bcf86cd799439011/recalculate", "POST"],
+        ["/api/payroll/runs/507f1f77bcf86cd799439011/decision", "POST"],
+        ["/api/payroll/runs/507f1f77bcf86cd799439011/payment", "POST"],
+        ["/api/payroll/attendance-periods", "POST"],
+        ["/api/payroll/attendance-periods/2026-10-01/2026-10-31/reopen", "POST"],
+        ["/api/payroll/employees/507f1f77bcf86cd799439011/payslips", "GET"],
+      ];
+      for (const [path, method] of requests) {
+        const response = await fetch(`${baseUrl}${path}`, {
+          method,
+          headers: ["POST", "PUT"].includes(method) ? { "Content-Type": "application/json" } : undefined,
+          body: ["POST", "PUT"].includes(method) ? "{}" : undefined,
+        });
+        assert.equal(response.status, 401, `${method} ${path}`);
+      }
     });
 
     assert.equal(response.status, 401, `${method} ${path}`);

@@ -1,0 +1,95 @@
+const assert = require("node:assert/strict");
+const { test } = require("node:test");
+const CreditReminderSettings = require("../models/creditReminderSettings");
+const Notification = require("../models/notification");
+const Sale = require("../models/sale");
+const User = require("../models/user");
+const { addCalendarDays, companyDate, dayDifference, generateCreditReminders, reminderThreshold } = require("../lib/creditReminders");
+
+const defaults = {
+  daysBeforeDue: [7, 1, 0],
+  daysAfterDue: [1, 3, 7],
+  repeatOverdueEveryDays: 7,
+  escalateAfterDays: 7,
+};
+
+test("credit reminders use Kampala dates and calculate calendar-day thresholds", () => {
+  assert.equal(companyDate(new Date("2026-10-23T21:30:00.000Z")), "2026-10-24");
+  assert.equal(addCalendarDays("2026-10-24", 7), "2026-10-31");
+  assert.equal(dayDifference("2026-10-24", "2026-10-31"), 7);
+});
+
+test("credit reminder thresholds alert before due, on due date, and repeat overdue weekly", () => {
+  assert.equal(reminderThreshold(7, defaults), "before-7");
+  assert.equal(reminderThreshold(1, defaults), "before-1");
+  assert.equal(reminderThreshold(0, defaults), "before-0");
+  assert.equal(reminderThreshold(-1, defaults), "overdue-1");
+  assert.equal(reminderThreshold(-3, defaults), "overdue-3");
+  assert.equal(reminderThreshold(-7, defaults), "overdue-7");
+  assert.equal(reminderThreshold(-14, defaults), "overdue-repeat-14");
+  assert.equal(reminderThreshold(-4, defaults), "overdue-3");
+  assert.equal(reminderThreshold(-16, defaults), "overdue-repeat-14");
+  assert.equal(reminderThreshold(-8, defaults), "overdue-7");
+  assert.equal(reminderThreshold(8, defaults), null);
+});
+
+test("credit reminder settings validate bounded non-negative thresholds", () => {
+  assert.equal(new CreditReminderSettings({ daysBeforeDue: [14, 2, 0] }).validateSync(), undefined);
+  const invalid = new CreditReminderSettings({ daysBeforeDue: [-1] }).validateSync();
+  assert.ok(invalid);
+});
+
+test("credit reminders create per-recipient threshold alerts idempotently and escalate overdue balances", async () => {
+  const originalSettingsFind = CreditReminderSettings.findById;
+  const originalSaleFind = Sale.find;
+  const originalUserFind = User.find;
+  const originalNotificationCreate = Notification.create;
+  const notifications = new Map();
+  let saleFilter;
+  CreditReminderSettings.findById = () => ({ lean: async () => defaults });
+  Sale.find = (filter) => {
+    saleFilter = filter;
+    return { lean: async () => [{
+      _id: "507f1f77bcf86cd799439099",
+      receiptNumber: "SAL-2026-000099",
+      customerId: "C-100",
+      customer: { name: "Saved customer" },
+      paymentTerms: "Credit",
+      dueDate: "2026-10-23",
+      total: 1000,
+      paidAmount: 200,
+      assignedTo: "507f1f77bcf86cd799439011",
+      voidedAt: null,
+    }] };
+  };
+  User.find = () => ({
+    select: () => ({ lean: async () => [
+      { _id: "507f1f77bcf86cd799439011", roles: ["Sales Manager"] },
+      { _id: "507f1f77bcf86cd799439012", roles: ["General Manager"] },
+      { _id: "507f1f77bcf86cd799439013", roles: ["Super Admin"] },
+    ] }),
+  });
+  Notification.create = async (notification) => {
+    const key = `${notification.recipientId}:${notification.thresholdKey}`;
+    if (notifications.has(key)) {
+      const error = new Error("Duplicate threshold");
+      error.code = 11000;
+      throw error;
+    }
+    notifications.set(key, notification);
+  };
+  try {
+    const now = new Date("2026-10-30T12:00:00.000Z");
+    assert.deepEqual(await generateCreditReminders(now), { evaluated: 1, created: 3 });
+    assert.deepEqual(await generateCreditReminders(now), { evaluated: 1, created: 0 });
+    assert.equal(notifications.size, 3);
+    assert.ok([...notifications.values()].every((notice) => notice.type === "credit_overdue" && notice.balance === 800));
+    assert.deepEqual(saleFilter.paymentTerms, "Credit");
+    assert.deepEqual(saleFilter.voidedAt, null);
+  } finally {
+    CreditReminderSettings.findById = originalSettingsFind;
+    Sale.find = originalSaleFind;
+    User.find = originalUserFind;
+    Notification.create = originalNotificationCreate;
+  }
+});

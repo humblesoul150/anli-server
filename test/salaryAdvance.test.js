@@ -152,7 +152,7 @@ test("salary advance role guards allow only HR for HR decisions and GM for final
     assert.deepEqual(await check(salaryAdvanceRouter.requireHrManager, ["Human Resource"]), { nextCalled: true, statusCode: undefined });
     assert.deepEqual(await check(salaryAdvanceRouter.requireHrManager, ["General Manager"]), { nextCalled: false, statusCode: 403 });
     assert.deepEqual(await check(salaryAdvanceRouter.requireGeneralManager, ["General Manager"]), { nextCalled: true, statusCode: undefined });
-    assert.deepEqual(await check(salaryAdvanceRouter.requireGeneralManager, ["Super Admin", "Admin"]), { nextCalled: false, statusCode: 403 });
+    assert.deepEqual(await check(salaryAdvanceRouter.requireGeneralManager, ["Super Admin", "Admin"]), { nextCalled: true, statusCode: undefined });
   } finally {
     audit.recordAudit = originalAudit;
   }

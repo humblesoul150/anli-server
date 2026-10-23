@@ -8,12 +8,13 @@ const {
   requirePasswordChanged,
 } = require("../middleware/authentication");
 const audit = require("../lib/audit");
+const { hasAnyDepartmentRole } = require("../lib/authorization");
 
 const router = express.Router();
 const allowedRoles = ["Super Admin", "Admin", "Human Resource"];
 
 async function requireAttendanceRole(request, response, next) {
-  if (request.authUser.roles.some((role) => allowedRoles.includes(role))) return next();
+  if (hasAnyDepartmentRole(request.authUser, allowedRoles)) return next();
   await audit.recordAudit({
     request,
     eventType: "security.authorization_denied",

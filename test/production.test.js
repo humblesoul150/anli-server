@@ -27,6 +27,7 @@ function productInput(overrides = {}) {
     category: "Bottle",
     unit: "150 ml",
     flavour: "Mango",
+    price: 24000,
     recipeRequired: false,
     ...overrides,
   };
@@ -34,6 +35,12 @@ function productInput(overrides = {}) {
 
 test("production product validation accepts optional packaging and rejects partial or invalid packs", () => {
   assert.equal(validateProduct(productInput()).error, undefined);
+  assert.equal(validateProduct(productInput()).value.price, 24000);
+  assert.match(validateProduct(productInput({ price: 0 })).error, /positive whole number of UGX per pack/);
+  assert.match(validateProduct(productInput({ price: 1250.5 })).error, /positive whole number of UGX per pack/);
+  assert.match(validateProduct({ ...productInput(), price: undefined }).error, /positive whole number of UGX per pack/);
+  assert.equal(validateProduct({ price: 1250 }, true).value.price, 1250);
+  assert.equal(validateProduct({}, true).error, undefined);
   assert.equal(validateProduct(productInput({
     packType: "Carton",
     piecesPerPack: 24,
@@ -70,7 +77,7 @@ test("daily tank-use calculation multiplies each recipe amount by tanks produced
   assert.match(validateProductionUsageInput({ productionRunId: productId, tanksProduced: 0 }).error, /positive/);
 });
 
-test("daily production validation computes output and rejects non-reconciling counts", () => {
+test("daily production validation calculates production without manual sales dispatch", () => {
   const input = validateProductionInput({
     productId,
     productionDate: "2026-10-21",
@@ -80,19 +87,20 @@ test("daily production validation computes output and rejects non-reconciling co
     closingStockPieces: 18,
     damageReason: "Damaged seals",
   });
-  assert.match(input.error, /cannot be negative/);
+  assert.match(input.error, /recorded through the Sales feature/);
 
   const validInput = {
     productId,
     productionDate: "2026-10-21",
     openingStockPieces: 100,
-    salesQuantityPieces: 30,
     damagedQuantityPieces: 2,
     closingStockPieces: 108,
     damageReason: "Damaged seals",
   };
   const valid = validateProductionInput(validInput);
-  assert.equal(valid.value.producedQuantityPieces, 40);
+  assert.equal(valid.value.producedQuantityPieces, 10);
+  assert.equal(valid.value.salesQuantityPieces, 0);
+  assert.match(validateProductionInput({ ...validInput, closingStockPieces: 18 }).error, /cannot be negative/);
   assert.match(validateProductionInput({ ...validInput, productionDate: "2026-02-30" }).error, /valid YYYY-MM-DD/);
   assert.match(validateProductionInput({ ...validInput, damagedQuantityPieces: 1, damageReason: "" }).error, /damage reason/);
   assert.match(validateProductionInput({ ...validInput, closingStockPieces: 108.5 }).error, /whole number of pieces/);
@@ -122,6 +130,12 @@ test("production schemas index product identity, daily uniqueness, recipes, and 
     updatedBy: userId,
   });
   await validProduct.validate();
+  assert.equal(validProduct.price, 24000);
+  await assert.rejects(new FinishedProduct({
+    ...productInput({ price: 0 }),
+    createdBy: userId,
+    updatedBy: userId,
+  }).validate(), /less than minimum allowed/);
 
   const recipe = new ProductionRecipe({
     productId,

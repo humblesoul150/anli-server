@@ -90,7 +90,7 @@ async function withTransaction(work) {
 }
 
 function validateProduct(body, partial = false) {
-  const allowed = ["code", "name", "category", "unit", "flavour", "packType", "piecesPerPack", "packWeightKg", "recipeRequired", "active", "ingredients"];
+  const allowed = ["code", "name", "category", "unit", "flavour", "packType", "piecesPerPack", "packWeightKg", "price", "recipeRequired", "active", "ingredients"];
   if (!requestObject(body, allowed)) return { error: "Provide product fields in the supported request shape." };
   const product = {};
   for (const field of ["code", "name", "category", "unit", "flavour"]) {
@@ -105,6 +105,11 @@ function validateProduct(body, partial = false) {
   if (product.category && !PRODUCT_CATEGORIES.includes(product.category)) return { error: "Choose Cup or Bottle as the product category." };
   if (product.unit && !PACK_SIZES.includes(product.unit)) return { error: "Product unit must be a supported millilitre pack size." };
   if (product.flavour && !FLAVOURS.includes(product.flavour)) return { error: "Choose a supported product flavour." };
+  if (own(body, "price") || !partial) {
+    const price = Number(body.price);
+    if (!Number.isInteger(price) || price <= 0) return { error: "Product price must be a positive whole number of UGX per pack." };
+    product.price = price;
+  }
 
   const hasPackInput = ["packType", "piecesPerPack", "packWeightKg"].some((field) => own(body, field));
   if (hasPackInput || !partial) {
@@ -197,7 +202,7 @@ async function listProducts(_request, response) {
   const products = await FinishedProduct.find().sort({ name: 1 }).lean();
   const ids = products.map((product) => product._id);
   const balances = await FinishedStockBalance.find({ productId: { $in: ids } }).lean();
-  const balanceMap = new Map(balances.map((balance) => [String(balance.productId), balance.quantityPieces]));
+  const balanceMap = new Map(balances.map((balance) => [String(balance.productId), balance]));
   const recipes = await ProductionRecipe.find({
     _id: { $in: products.map((product) => product.activeRecipeId).filter(Boolean) },
   }).lean();
@@ -205,7 +210,9 @@ async function listProducts(_request, response) {
   return response.json({
     products: products.map((product) => ({
       ...serialize(product),
-      balancePieces: balanceMap.get(String(product._id)) ?? 0,
+      balancePieces: balanceMap.get(String(product._id))?.quantityPieces ?? 0,
+      reservedPieces: balanceMap.get(String(product._id))?.reservedPieces ?? 0,
+      availablePieces: Math.max(0, (balanceMap.get(String(product._id))?.quantityPieces ?? 0) - (balanceMap.get(String(product._id))?.reservedPieces ?? 0)),
       recipe: recipeMap.has(String(product.activeRecipeId)) ? serialize(recipeMap.get(String(product.activeRecipeId))) : null,
     })),
   });
@@ -1092,7 +1099,7 @@ function validateProductionInput(body) {
   if (!requestObject(body, allowed)) return { error: "Production record contains unsupported fields." };
   if (!validObjectId(body.productId)) return { error: "Choose a valid product." };
   if (!validDate(body.productionDate)) return { error: "Production date must be a valid YYYY-MM-DD date." };
-  for (const field of ["openingStockPieces", "salesQuantityPieces", "damagedQuantityPieces", "closingStockPieces"]) {
+  for (const field of ["openingStockPieces", "damagedQuantityPieces", "closingStockPieces"]) {
     if (!Number.isInteger(Number(body[field])) || Number(body[field]) < 0) return { error: `${field} must be a non-negative whole number of pieces.` };
   }
   if (Number(body.damagedQuantityPieces) > 0 && (typeof body.damageReason !== "string" || !body.damageReason.trim())) {
@@ -1104,10 +1111,17 @@ function validateProductionInput(body) {
   if (body.idempotencyKey !== undefined && (typeof body.idempotencyKey !== "string" || !body.idempotencyKey.trim() || body.idempotencyKey.length > 120)) {
     return { error: "Idempotency key must be 1–120 characters." };
   }
-  const produced = Number(body.closingStockPieces) + Number(body.salesQuantityPieces)
+  const salesQuantityPieces = body.salesQuantityPieces === undefined ? 0 : Number(body.salesQuantityPieces);
+  if (!Number.isInteger(salesQuantityPieces) || salesQuantityPieces < 0) {
+    return { error: "salesQuantityPieces must be a non-negative whole number of pieces." };
+  }
+  if (salesQuantityPieces > 0) {
+    return { error: "Sales dispatches must be recorded through the Sales feature." };
+  }
+  const produced = Number(body.closingStockPieces)
     + Number(body.damagedQuantityPieces) - Number(body.openingStockPieces);
   if (produced < 0) return { error: "Calculated production cannot be negative." };
-  return { value: { ...body, producedQuantityPieces: produced } };
+  return { value: { ...body, salesQuantityPieces: 0, producedQuantityPieces: produced } };
 }
 
 async function createProductionRun(request, response) {
@@ -1187,7 +1201,6 @@ async function createProductionRun(request, response) {
       }], { session });
       const finishedMovementInputs = [
         ...(value.producedQuantityPieces > 0 ? [{ type: "Production", direction: "in", quantityPieces: value.producedQuantityPieces, reason: "Calculated daily production" }] : []),
-        ...(Number(value.salesQuantityPieces) > 0 ? [{ type: "Sales dispatch", direction: "out", quantityPieces: Number(value.salesQuantityPieces), reason: "Manually entered daily sales quantity" }] : []),
         ...(Number(value.damagedQuantityPieces) > 0 ? [{ type: "Damage/write-off", direction: "out", quantityPieces: Number(value.damagedQuantityPieces), reason: value.damageReason.trim() }] : []),
       ];
       for (const movementInput of finishedMovementInputs) {
@@ -1224,7 +1237,7 @@ async function listStockBalances(_request, response) {
     RawMaterial.find({ active: true }).sort({ name: 1 }).lean(),
     RawMaterialBalance.find().lean(),
   ]);
-  const finishedMap = new Map(finishedBalances.map((item) => [String(item.productId), item.quantityPieces]));
+  const finishedMap = new Map(finishedBalances.map((item) => [String(item.productId), item]));
   const rawMap = new Map();
   for (const item of rawBalances) {
     const key = String(item.materialId);
@@ -1237,7 +1250,9 @@ async function listStockBalances(_request, response) {
       unit: product.unit,
       packType: product.packType,
       piecesPerPack: product.piecesPerPack,
-      balancePieces: finishedMap.get(String(product._id)) ?? 0,
+      balancePieces: finishedMap.get(String(product._id))?.quantityPieces ?? 0,
+      reservedPieces: finishedMap.get(String(product._id))?.reservedPieces ?? 0,
+      availablePieces: Math.max(0, (finishedMap.get(String(product._id))?.quantityPieces ?? 0) - (finishedMap.get(String(product._id))?.reservedPieces ?? 0)),
     })),
     rawMaterials: materials.map((material) => ({
       materialId: String(material._id),

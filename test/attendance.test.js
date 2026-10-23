@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
 const mongoose = require("mongoose");
+const AttendancePeriod = require("../models/attendancePeriod");
 const AttendanceRecord = require("../models/attendanceRecord");
 const Employee = require("../models/employee");
 const audit = require("../lib/audit");
@@ -106,6 +107,7 @@ test("monthly attendance listing applies a date and employee filter", async () =
 
 test("daily attendance saves are retry-safe, preserve existing employee records, and audit changes", async () => {
   const originalEmployeeFind = Employee.find;
+  const originalPeriodFindOne = AttendancePeriod.findOne;
   const originalAttendanceFind = AttendanceRecord.find;
   const originalBulkWrite = AttendanceRecord.bulkWrite;
   const originalAudit = audit.recordAudit;
@@ -113,6 +115,10 @@ test("daily attendance saves are retry-safe, preserve existing employee records,
   const stored = [];
   const operations = [];
   const events = [];
+  AttendancePeriod.findOne = () => ({
+    session() { return this; },
+    lean: async () => null,
+  });
   Employee.find = () => ({
     select() { return this; },
     session() { return this; },
@@ -169,6 +175,7 @@ test("daily attendance saves are retry-safe, preserve existing employee records,
     assert.equal(events.length, 1);
   } finally {
     Employee.find = originalEmployeeFind;
+    AttendancePeriod.findOne = originalPeriodFindOne;
     AttendanceRecord.find = originalAttendanceFind;
     AttendanceRecord.bulkWrite = originalBulkWrite;
     audit.recordAudit = originalAudit;
@@ -178,6 +185,7 @@ test("daily attendance saves are retry-safe, preserve existing employee records,
 
 test("saving Unmarked removes the employee's date record and audits the removal", async () => {
   const originalEmployeeFind = Employee.find;
+  const originalPeriodFindOne = AttendancePeriod.findOne;
   const originalAttendanceFind = AttendanceRecord.find;
   const originalBulkWrite = AttendanceRecord.bulkWrite;
   const originalAudit = audit.recordAudit;
@@ -193,6 +201,10 @@ test("saving Unmarked removes the employee's date record and audits the removal"
   };
   const operations = [];
   const events = [];
+  AttendancePeriod.findOne = () => ({
+    session() { return this; },
+    lean: async () => null,
+  });
   let listCalls = 0;
   Employee.find = () => ({
     select() { return this; },
@@ -232,9 +244,33 @@ test("saving Unmarked removes the employee's date record and audits the removal"
     assert.equal(events[0].eventType, "attendance.removed");
   } finally {
     Employee.find = originalEmployeeFind;
+    AttendancePeriod.findOne = originalPeriodFindOne;
     AttendanceRecord.find = originalAttendanceFind;
     AttendanceRecord.bulkWrite = originalBulkWrite;
     audit.recordAudit = originalAudit;
+    mongoose.startSession = originalStartSession;
+  }
+});
+
+test("attendance writes are blocked inside a closed payroll period", async () => {
+  const originalPeriodFindOne = AttendancePeriod.findOne;
+  const originalStartSession = mongoose.startSession;
+  AttendancePeriod.findOne = () => ({
+    session() { return this; },
+    lean: async () => ({ periodStart: "2026-10-01", periodEnd: "2026-10-31" }),
+  });
+  mongoose.startSession = async () => ({
+    withTransaction: async (callback) => callback(),
+    endSession: async () => {},
+  });
+  try {
+    await assert.rejects(saveDailyAttendance({
+      params: { workDate: "2026-10-19" },
+      body: { entries: [{ employeeId, status: "Present", halfDay: false, late: false }] },
+      authUser: { _id: "507f1f77bcf86cd799439012" },
+    }, {}), (error) => error.statusCode === 409);
+  } finally {
+    AttendancePeriod.findOne = originalPeriodFindOne;
     mongoose.startSession = originalStartSession;
   }
 });

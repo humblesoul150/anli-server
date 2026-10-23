@@ -19,6 +19,7 @@ const {
 } = require("../controllers/salaryAdvanceAttachmentController");
 const { authenticate, requirePasswordChanged } = require("../middleware/authentication");
 const audit = require("../lib/audit");
+const { hasAnyDepartmentRole } = require("../lib/authorization");
 
 const router = express.Router();
 const authenticated = [authenticate, requirePasswordChanged];
@@ -29,7 +30,7 @@ const attachmentUpload = multer({
 
 function requireRole(roles, reason, message) {
   return async (request, response, next) => {
-    if (request.authUser.roles.some((role) => roles.includes(role))) return next();
+    if (hasAnyDepartmentRole(request.authUser, roles)) return next();
     await audit.recordAudit({
       request,
       eventType: "security.authorization_denied",

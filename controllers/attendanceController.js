@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const AttendanceRecord = require("../models/attendanceRecord");
+const AttendancePeriod = require("../models/attendancePeriod");
 const Employee = require("../models/employee");
 const audit = require("../lib/audit");
 
@@ -113,6 +114,16 @@ function changedFields(existing, entry) {
 }
 
 async function persistDailyAttendance(request, entries, session) {
+  const closedPeriod = await AttendancePeriod.findOne({
+    status: "Closed",
+    periodStart: { $lte: request.params.workDate },
+    periodEnd: { $gte: request.params.workDate },
+  }).session(session).lean();
+  if (closedPeriod) {
+    const error = new Error("Attendance in a certified payroll period is locked. A Super Admin must reopen it with a correction reason.");
+    error.statusCode = 409;
+    throw error;
+  }
   const employeeIds = entries.map((entry) => entry.employeeId);
   const employees = await Employee.find({ _id: { $in: employeeIds } })
     .select("_id status")

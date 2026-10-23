@@ -567,7 +567,7 @@ async function recordPayrollRepayments(request, response) {
     return response.status(400).json({ error: "Payroll run and payslip IDs are invalid." });
   }
   if (!mongoose.isValidObjectId(body.employeeId) || !isDate(body.periodEnd)) return response.status(400).json({ error: "employeeId or periodEnd is invalid." });
-  if (!["Human Resource", "Accountant"].some((role) => request.authUser.roles.includes(role))) return response.status(403).json({ error: "You do not have permission to post payroll repayments." });
+  if (!["Human Resource", "Accountant", "Super Admin"].some((role) => request.authUser.roles.includes(role))) return response.status(403).json({ error: "You do not have permission to post payroll repayments." });
 
   try {
     const result = await withTransaction(async (session) => {

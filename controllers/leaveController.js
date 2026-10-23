@@ -6,6 +6,7 @@ const LeavePolicy = require("../models/leavePolicy");
 const LeaveRequest = require("../models/leaveRequest");
 const User = require("../models/user");
 const audit = require("../lib/audit");
+const { hasAnyDepartmentRole } = require("../lib/authorization");
 const {
   DEFAULT_POLICY,
   addDays,
@@ -20,7 +21,7 @@ const {
 const ADMIN_ROLES = ["Super Admin", "Admin", "Human Resource"];
 const REQUEST_TYPES = ["Annual", "Sick", "Maternity/Paternity", "Compassionate", "Other"];
 function hasRole(user, roles = ADMIN_ROLES) {
-  return user?.roles?.some((role) => roles.includes(role)) ?? false;
+  return hasAnyDepartmentRole(user, roles);
 }
 
 async function denyLeaveAdmin(request, response, resource, message) {

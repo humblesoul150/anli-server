@@ -2,6 +2,7 @@ const express = require("express");
 const controller = require("../controllers/productionController");
 const { authenticate, requirePasswordChanged } = require("../middleware/authentication");
 const audit = require("../lib/audit");
+const { hasAnyDepartmentRole } = require("../lib/authorization");
 
 const router = express.Router();
 const readRoles = ["Super Admin", "Admin", "General Manager", "Production Manager", "Inventory Manager"];
@@ -9,7 +10,7 @@ const writeRoles = ["Super Admin", "Admin", "General Manager", "Production Manag
 
 function requireRoles(allowedRoles) {
   return async (request, response, next) => {
-    if (request.authUser.roles.some((role) => allowedRoles.includes(role))) return next();
+    if (hasAnyDepartmentRole(request.authUser, allowedRoles)) return next();
     await audit.recordAudit({
       request,
       eventType: "security.authorization_denied",
