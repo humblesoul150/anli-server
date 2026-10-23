@@ -23,6 +23,7 @@ const salesRoutes = require("./routes/sales");
 const receiptRoutes = require("./routes/receipts");
 const orderRoutes = require("./routes/orders");
 const notificationRoutes = require("./routes/notifications");
+const approvalRoutes = require("./routes/approvals");
 
 function createApp(config) {
   const app = express();
@@ -83,6 +84,7 @@ function createApp(config) {
   app.use("/api/receipts", receiptRoutes);
   app.use("/api/orders", orderRoutes);
   app.use("/api/notifications", notificationRoutes);
+  app.use("/api/approvals", approvalRoutes);
 
   app.use((error, _request, response, _next) => {
     if (response.headersSent) return;

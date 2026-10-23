@@ -156,6 +156,16 @@ Employee response requirements and calendar-day response windows are configurabl
 
 Case changes and audit events are committed together in MongoDB transactions. All endpoints require an authenticated session with the temporary-password change completed. Employee case access is scoped to the employee profile linked to the signed-in account; manager access is scoped to their assigned cases. Automatic notification delivery, employment termination actions, and payroll changes are intentionally outside this workflow.
 
+## Central approval inbox
+
+The client reads `GET /api/approvals` for a normalized inbox across formal approval workflows: Leave requests and amendments, Salary Advances, Payroll, Expenses, and Disciplinary cases. The route requires an authenticated session with the temporary-password change completed. Each item includes its workflow and record IDs, reference, requester, summary, status, current stage, `canAct`, and available decision history; the response also includes actionable/in-progress/history counts and `truncatedSources`.
+
+The inbox applies each source workflow's read scope before including records. Leave visibility follows the Leave API; Salary Advance, Payroll, and Expense records follow their reader roles; Disciplinary records are limited to HR or assigned reviewers, with Super Admin inbox visibility limited to cases assigned to that account. Disciplinary list items omit evidence assets and only contain case details for authorized case readers.
+
+The endpoint returns up to the 500 most recent records per readable source. If a source has additional records, its name appears in `truncatedSources` and the client indicates that older records must be located in that source module. The counts cover the returned inbox items, not records omitted by this cap.
+
+The inbox is read-only aggregation, not a replacement approval engine. Decisions must continue through the existing source routes, which enforce each workflow's reviewer, role, stage-order, self-approval, and validation rules: `/api/leave/:id/decision`, `/api/leave/:id/amendments/:amendmentId/decision`, `/api/salary-advances/:id/hr-decision`, `/api/salary-advances/:id/gm-decision`, `/api/payroll/runs/:id/decision`, `/api/expenses/:id/decision`, and `/api/disciplinary-cases/:caseId/approvals`. Orders and attendance close/reopen actions remain in their own operational workflows.
+
 ## Production, products, and inventory
 
 Production catalog and inventory records are MongoDB-backed. All routes require an authenticated session with the temporary-password change completed and one of Super Admin, Admin, General Manager, Production Manager, or Inventory Manager. Product and ingredient creation, product edits, receipts, adjustments, and production posting are audited.

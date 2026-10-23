@@ -27,6 +27,12 @@ test("health endpoint remains available", async () => {
   assert.equal((await response.json()).status, "OK");
 });
 
+test("approval inbox rejects unauthenticated requests", async () => {
+  const response = await fetch(`${baseUrl}/api/approvals`);
+  assert.equal(response.status, 401);
+  assert.equal((await response.json()).error, "Authentication required.");
+});
+
 test("order reads and mutations reject unauthenticated requests", async () => {
   const requests = [
     ["/api/orders", "GET"],
