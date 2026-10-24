@@ -52,7 +52,11 @@ function createApp(config) {
   app.get("/health", (_request, response) => {
     response
       .status(200)
-      .json({ status: "OK", timestamp: new Date().toISOString() });
+      .json({
+        status: "OK",
+        message: "server is all good and healthy",
+        timestamp: new Date().toISOString(),
+      });
   });
 
   const authRateLimit = rateLimit({
