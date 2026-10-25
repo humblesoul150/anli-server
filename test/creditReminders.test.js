@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
 const CreditReminderSettings = require("../models/creditReminderSettings");
-const Notification = require("../models/notification");
+const NotificationOutbox = require("../models/notificationOutbox");
 const Sale = require("../models/sale");
 const User = require("../models/user");
 const { addCalendarDays, companyDate, dayDifference, generateCreditReminders, reminderThreshold } = require("../lib/creditReminders");
@@ -43,8 +43,8 @@ test("credit reminders create per-recipient threshold alerts idempotently and es
   const originalSettingsFind = CreditReminderSettings.findById;
   const originalSaleFind = Sale.find;
   const originalUserFind = User.find;
-  const originalNotificationCreate = Notification.create;
-  const notifications = new Map();
+  const originalOutboxCreate = NotificationOutbox.create;
+  const events = new Map();
   let saleFilter;
   CreditReminderSettings.findById = () => ({ lean: async () => defaults });
   Sale.find = (filter) => {
@@ -69,27 +69,28 @@ test("credit reminders create per-recipient threshold alerts idempotently and es
       { _id: "507f1f77bcf86cd799439013", roles: ["Super Admin"] },
     ] }),
   });
-  Notification.create = async (notification) => {
-    const key = `${notification.recipientId}:${notification.thresholdKey}`;
-    if (notifications.has(key)) {
-      const error = new Error("Duplicate threshold");
+  NotificationOutbox.create = async (event) => {
+    if (events.has(event.eventKey)) {
+      const error = new Error("Duplicate event");
       error.code = 11000;
       throw error;
     }
-    notifications.set(key, notification);
+    events.set(event.eventKey, event);
   };
   try {
     const now = new Date("2026-10-30T12:00:00.000Z");
     assert.deepEqual(await generateCreditReminders(now), { evaluated: 1, created: 3 });
     assert.deepEqual(await generateCreditReminders(now), { evaluated: 1, created: 0 });
-    assert.equal(notifications.size, 3);
-    assert.ok([...notifications.values()].every((notice) => notice.type === "credit_overdue" && notice.balance === 800));
+    assert.equal(events.size, 1);
+    assert.equal(events.values().next().value.type, "credit_overdue");
+    assert.equal(events.values().next().value.recipientIds.length, 3);
+    assert.equal(events.values().next().value.resource.type, "sale");
     assert.deepEqual(saleFilter.paymentTerms, "Credit");
     assert.deepEqual(saleFilter.voidedAt, null);
   } finally {
     CreditReminderSettings.findById = originalSettingsFind;
     Sale.find = originalSaleFind;
     User.find = originalUserFind;
-    Notification.create = originalNotificationCreate;
+    NotificationOutbox.create = originalOutboxCreate;
   }
 });

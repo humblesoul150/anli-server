@@ -5,6 +5,7 @@ const { idleTimeoutMs } = require("../lib/sessionPolicy");
 const { hashSessionToken } = require("../lib/sessionTokens");
 const { SESSION_SECONDS } = require("../lib/sessionConstants");
 const audit = require("../lib/audit");
+const { captureAuthenticatedActivity } = require("./auditReads");
 
 const COOKIE_NAME = "anli_session";
 
@@ -106,6 +107,7 @@ async function authenticate(request, response, next) {
   request.authUser = user;
   request.authSession = session;
   request.authSessionToken = token;
+  captureAuthenticatedActivity(request, response, () => {});
   return next();
 }
 

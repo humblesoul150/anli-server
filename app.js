@@ -24,6 +24,7 @@ const receiptRoutes = require("./routes/receipts");
 const orderRoutes = require("./routes/orders");
 const notificationRoutes = require("./routes/notifications");
 const approvalRoutes = require("./routes/approvals");
+const dashboardRoutes = require("./routes/dashboard");
 
 function createApp(config) {
   const app = express();
@@ -89,6 +90,7 @@ function createApp(config) {
   app.use("/api/orders", orderRoutes);
   app.use("/api/notifications", notificationRoutes);
   app.use("/api/approvals", approvalRoutes);
+  app.use("/api/dashboard", dashboardRoutes);
 
   app.use((error, _request, response, _next) => {
     if (response.headersSent) return;

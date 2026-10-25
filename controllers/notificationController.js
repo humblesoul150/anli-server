@@ -1,53 +1,89 @@
 const Notification = require("../models/notification");
 const CreditReminderSettings = require("../models/creditReminderSettings");
 const audit = require("../lib/audit");
+const { emitToUser } = require("../lib/notificationRealtime");
+const { serializeNotification } = require("../lib/notificationEvents");
 
 const actorId = (request) => request.authUser._id;
+const categories = new Set(["approval", "leave", "payroll", "salary_advance", "expense", "inventory", "sales", "security", "general"]);
 
 async function listNotifications(request, response) {
   const limitValue = Number(request.query.limit || 50);
   const limit = Number.isInteger(limitValue) ? Math.min(100, Math.max(1, limitValue)) : 50;
-  const filter = { recipientId: actorId(request) };
-  if (request.query.unread === "true") filter.readAt = null;
-  const notifications = await Notification.find(filter).sort({ createdAt: -1 }).limit(limit).lean();
-  const unreadCount = await Notification.countDocuments({ recipientId: filter.recipientId, readAt: null });
-  return response.json({ notifications: notifications.map(serialize), unreadCount });
-}
-
-function serialize(notification) {
-  return {
-    id: String(notification._id),
-    type: notification.type,
-    title: notification.title,
-    message: notification.message,
-    saleId: String(notification.saleId),
-    receiptNumber: notification.receiptNumber,
-    dueDate: notification.dueDate,
-    balance: notification.balance,
-    readAt: notification.readAt,
-    createdAt: notification.createdAt,
+  const filter = {
+    recipientId: actorId(request),
+    $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }],
   };
+  if (request.query.unread === "true") filter.readAt = null;
+  if (request.query.category) {
+    const category = String(request.query.category);
+    if (category === "action_required") filter.severity = { $in: ["action_required", "urgent"] };
+    else if (categories.has(category)) filter.category = category;
+    else return response.status(400).json({ error: "Notification category is invalid." });
+  }
+  if (request.query.cursor !== undefined) {
+    const cursor = String(request.query.cursor);
+    if (!/^[a-f\d]{24}$/i.test(cursor)) return response.status(400).json({ error: "Notification cursor is invalid." });
+    const previous = await Notification.findOne({ _id: cursor, recipientId: actorId(request) }).select("_id createdAt").lean();
+    if (!previous) return response.status(400).json({ error: "Notification cursor was not found." });
+    filter.$and = [{
+      $or: [
+        { createdAt: { $lt: previous.createdAt } },
+        { createdAt: previous.createdAt, _id: { $lt: previous._id } },
+      ],
+    }];
+  }
+  const results = await Notification.find(filter).sort({ createdAt: -1, _id: -1 }).limit(limit + 1).lean();
+  const hasMore = results.length > limit;
+  const notifications = results.slice(0, limit);
+  const unreadCount = await Notification.countDocuments({
+    recipientId: actorId(request),
+    readAt: null,
+    $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }],
+  });
+  return response.json({
+    notifications: notifications.map(serializeNotification),
+    unreadCount,
+    nextCursor: hasMore ? String(notifications[notifications.length - 1]._id) : null,
+  });
 }
 
 async function markRead(request, response) {
   if (!/^[a-f\d]{24}$/i.test(request.params.id)) {
     return response.status(400).json({ error: "Notification ID is invalid." });
   }
-  const notification = await Notification.findOneAndUpdate(
-    { _id: request.params.id, recipientId: actorId(request) },
+  let notification = await Notification.findOneAndUpdate(
+    { _id: request.params.id, recipientId: actorId(request), readAt: null },
     { $set: { readAt: new Date() } },
     { new: true },
   ).lean();
+  if (!notification) {
+    notification = await Notification.findOne({
+      _id: request.params.id,
+      recipientId: actorId(request),
+    }).lean();
+  }
   if (!notification) return response.status(404).json({ error: "Notification not found." });
-  return response.json({ notification: serialize(notification) });
+  const unreadCount = await Notification.countDocuments({
+    recipientId: actorId(request),
+    readAt: null,
+    $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }],
+  });
+  emitToUser(actorId(request), "notification.unread_count", { unreadCount });
+  return response.json({ notification: serializeNotification(notification), unreadCount });
 }
 
 async function markAllRead(request, response) {
   const result = await Notification.updateMany(
-    { recipientId: actorId(request), readAt: null },
+    {
+      recipientId: actorId(request),
+      readAt: null,
+      $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }],
+    },
     { $set: { readAt: new Date() } },
   );
-  return response.json({ updated: result.modifiedCount });
+  emitToUser(actorId(request), "notification.unread_count", { unreadCount: 0 });
+  return response.json({ updated: result.modifiedCount, unreadCount: 0 });
 }
 
 async function getReminderSettings(_request, response) {

@@ -1,5 +1,9 @@
 const express = require("express");
-const { listAccountEvents, listEvents } = require("../controllers/auditController");
+const {
+  listAccountEvents,
+  listEventTypes,
+  listEvents,
+} = require("../controllers/auditController");
 const {
   authenticate,
   requirePasswordChanged,
@@ -9,6 +13,7 @@ const {
 const router = express.Router();
 const superAdminOnly = [authenticate, requireSuperAdmin, requirePasswordChanged];
 
+router.get("/event-types", superAdminOnly, listEventTypes);
 router.get("/", superAdminOnly, listEvents);
 router.get("/users/:userId", superAdminOnly, listAccountEvents);
 

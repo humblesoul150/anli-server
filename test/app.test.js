@@ -33,6 +33,12 @@ test("approval inbox rejects unauthenticated requests", async () => {
   assert.equal((await response.json()).error, "Authentication required.");
 });
 
+test("dashboard summary rejects unauthenticated requests", async () => {
+  const response = await fetch(`${baseUrl}/api/dashboard/summary?from=2026-10-20&to=2026-10-24`);
+  assert.equal(response.status, 401);
+  assert.equal((await response.json()).error, "Authentication required.");
+});
+
 test("order reads and mutations reject unauthenticated requests", async () => {
   const requests = [
     ["/api/orders", "GET"],
@@ -204,12 +210,15 @@ test("expense reads, decisions, payments, receipts, and imports reject unauthent
         ["/api/sales/507f1f77bcf86cd799439011/credit", "PATCH"],
         ["/api/sales/credit-customers/C-100/statement", "GET"],
         ["/api/notifications", "GET"],
+        ["/api/notifications?unread=true", "GET"],
+        ["/api/notifications/read-all", "PATCH"],
+        ["/api/notifications/507f1f77bcf86cd799439011/read", "PATCH"],
       ];
       for (const [path, method] of requests) {
         const response = await fetch(`${baseUrl}${path}`, {
           method,
-          headers: method === "POST" ? { "Content-Type": "application/json" } : undefined,
-          body: method === "POST" ? "{}" : undefined,
+          headers: ["POST", "PATCH"].includes(method) ? { "Content-Type": "application/json" } : undefined,
+          body: ["POST", "PATCH"].includes(method) ? "{}" : undefined,
         });
         assert.equal(response.status, 401, `${method} ${path}`);
       }

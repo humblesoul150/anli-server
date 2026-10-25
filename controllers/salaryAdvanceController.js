@@ -360,8 +360,10 @@ async function createSalaryAdvance(request, response) {
     updatedBy: request.authUser._id,
     activity: [makeActivity("Request submitted", request.authUser)],
   });
-  await advance.save();
-  await writeAudit(request, advance, "salary_advance.requested");
+  await withTransaction(async (session) => {
+    await advance.save({ session });
+    await writeAudit(request, advance, "salary_advance.requested", session);
+  });
   return response.status(201).json({ advance });
 }
 

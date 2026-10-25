@@ -18,6 +18,8 @@ const AUDIT_EVENT_TYPES = [
   "security.session_policy_updated",
   "security.authorization_denied",
   "company.profile_updated",
+  "credit.reminder_settings_updated",
+  "credit.sale_updated",
   "employee.created",
   "employee.updated",
   "employee.deactivated",
@@ -123,7 +125,68 @@ const AUDIT_EVENT_TYPES = [
   "order.legacy_imported",
   "attendance.period_closed",
   "attendance.period_reopened",
+  "data.read.succeeded",
+  "data.read.failed",
+  "data.read.denied",
+  "data.write.succeeded",
+  "data.write.failed",
+  "data.write.denied",
 ];
+
+const AUDIT_RESOURCE_TYPES = [
+  "account",
+  "attendance",
+  "asset",
+  "assets",
+  "audit",
+  "auth",
+  "company_profile",
+  "credit",
+  "customer",
+  "customers",
+  "dashboard",
+  "data",
+  "disciplinary",
+  "disciplinary-cases",
+  "employee",
+  "employees",
+  "expense",
+  "expenses",
+  "inventory",
+  "leave",
+  "notifications",
+  "order",
+  "orders",
+  "payroll",
+  "profile-settings",
+  "production",
+  "production_product",
+  "raw_material",
+  "receipt",
+  "receipts",
+  "sale",
+  "sales",
+  "salary_advance",
+  "salary-advances",
+  "security",
+  "security-settings",
+  "session",
+  "sessions",
+  "users",
+  "approvals",
+];
+const AUDIT_EVENT_CATEGORIES = [...new Set(
+  AUDIT_EVENT_TYPES.map((eventType) => eventType.split(".")[0]),
+)];
+
+const auditResourceSchema = new mongoose.Schema(
+  {
+    type: { type: String, required: true, maxlength: 40 },
+    id: { type: String, maxlength: 120 },
+    reference: { type: String, maxlength: 120 },
+  },
+  { _id: false, strict: "throw" },
+);
 
 const auditEventSchema = new mongoose.Schema(
   {
@@ -140,6 +203,7 @@ const auditEventSchema = new mongoose.Schema(
     targetUserId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     targetName: { type: String, maxlength: 120 },
     targetEmail: { type: String, maxlength: 254 },
+    resource: { type: auditResourceSchema, default: null },
     sessionId: { type: mongoose.Schema.Types.ObjectId, ref: "Session", default: null },
     ipAddress: { type: String, maxlength: 64 },
     userAgent: { type: String, maxlength: 300 },
@@ -153,7 +217,10 @@ auditEventSchema.index({ createdAt: -1, _id: -1 });
 auditEventSchema.index({ targetUserId: 1, createdAt: -1, _id: -1 });
 auditEventSchema.index({ actorId: 1, createdAt: -1, _id: -1 });
 auditEventSchema.index({ eventType: 1, createdAt: -1, _id: -1 });
+auditEventSchema.index({ "resource.type": 1, createdAt: -1, _id: -1 });
 
 module.exports =
   mongoose.models.AuditEvent || mongoose.model("AuditEvent", auditEventSchema);
 module.exports.AUDIT_EVENT_TYPES = AUDIT_EVENT_TYPES;
+module.exports.AUDIT_RESOURCE_TYPES = AUDIT_RESOURCE_TYPES;
+module.exports.AUDIT_EVENT_CATEGORIES = AUDIT_EVENT_CATEGORIES;

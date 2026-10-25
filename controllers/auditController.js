@@ -1,7 +1,11 @@
 const mongoose = require("mongoose");
 const AuditEvent = require("../models/auditEvent");
 const User = require("../models/user");
-const { AUDIT_EVENT_TYPES } = require("../models/auditEvent");
+const {
+  AUDIT_EVENT_CATEGORIES,
+  AUDIT_EVENT_TYPES,
+  AUDIT_RESOURCE_TYPES,
+} = require("../models/auditEvent");
 
 const MAX_PAGE_SIZE = 100;
 const DEFAULT_PAGE_SIZE = 50;
@@ -45,6 +49,13 @@ function serializeEvent(event) {
     target: event.targetUserId
       ? { id: String(event.targetUserId), name: event.targetName, email: event.targetEmail }
       : null,
+    resource: event.resource
+      ? {
+        type: event.resource.type,
+        id: event.resource.id,
+        reference: event.resource.reference,
+      }
+      : null,
     sessionId: event.sessionId ? String(event.sessionId) : null,
     ipAddress: event.ipAddress,
     userAgent: event.userAgent,
@@ -56,9 +67,11 @@ function serializeEvent(event) {
 async function listEvents(request, response, forcedTargetUserId) {
   const {
     eventType,
+    category,
     outcome,
     actorId,
     targetUserId: queryTargetUserId,
+    resourceType,
     from,
     to,
     cursor: cursorValue,
@@ -66,9 +79,11 @@ async function listEvents(request, response, forcedTargetUserId) {
   const targetUserId = forcedTargetUserId || queryTargetUserId;
   for (const [name, value] of Object.entries({
     eventType,
+    category,
     outcome,
     actorId,
     targetUserId,
+    resourceType,
     from,
     to,
     cursor: cursorValue,
@@ -86,6 +101,12 @@ async function listEvents(request, response, forcedTargetUserId) {
   }
   if (eventType && !AUDIT_EVENT_TYPES.includes(eventType)) {
     return response.status(400).json({ error: "Unknown audit event type." });
+  }
+  if (category && !AUDIT_EVENT_CATEGORIES.includes(category)) {
+    return response.status(400).json({ error: "Unknown audit event category." });
+  }
+  if (resourceType && !AUDIT_RESOURCE_TYPES.includes(resourceType)) {
+    return response.status(400).json({ error: "Unknown audit resource type." });
   }
   if (outcome && !["success", "failure", "denied"].includes(outcome)) {
     return response.status(400).json({ error: "Choose a valid audit outcome." });
@@ -115,9 +136,11 @@ async function listEvents(request, response, forcedTargetUserId) {
   if (cursor === undefined) return response.status(400).json({ error: "cursor is invalid." });
   const conditions = [];
   if (eventType) conditions.push({ eventType });
+  if (category) conditions.push({ eventType: new RegExp(`^${category}\\.`) });
   if (outcome) conditions.push({ outcome });
   if (actorId) conditions.push({ actorId });
   if (targetUserId) conditions.push({ targetUserId });
+  if (resourceType) conditions.push({ "resource.type": resourceType });
   if (Object.keys(dateRange).length) conditions.push({ createdAt: dateRange });
   if (cursor) {
     conditions.push({
@@ -145,6 +168,14 @@ async function listEvents(request, response, forcedTargetUserId) {
   });
 }
 
+async function listEventTypes(_request, response) {
+  return response.json({
+    eventTypes: AUDIT_EVENT_TYPES,
+    resourceTypes: AUDIT_RESOURCE_TYPES,
+    categories: AUDIT_EVENT_CATEGORIES,
+  });
+}
+
 async function listAccountEvents(request, response) {
   if (!mongoose.Types.ObjectId.isValid(request.params.userId)) {
     return response.status(400).json({ error: "Invalid user id." });
@@ -154,4 +185,4 @@ async function listAccountEvents(request, response) {
   return listEvents(request, response, request.params.userId);
 }
 
-module.exports = { listAccountEvents, listEvents, parseCursor };
+module.exports = { listAccountEvents, listEventTypes, listEvents, parseCursor };
