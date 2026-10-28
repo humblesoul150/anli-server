@@ -165,26 +165,37 @@ async function resolveOrderData(input, request, session) {
 }
 
 async function ensureStockBalance(productId, userId, session) {
-  await FinishedStockBalance.findOneAndUpdate(
-    { productId },
-    { $setOnInsert: { quantityPieces: 0, reservedPieces: 0, updatedBy: userId } },
-    { upsert: true, new: true, session, setDefaultsOnInsert: true },
-  );
+  const existing = await FinishedStockBalance.findOne({ productId }).session(session).lean();
+  if (existing && existing.inventoryUnit !== "pack") {
+    throw invalid("Finished stock has not been migrated to box/carton units. Run the finished-stock migration first.", 409);
+  }
+  if (!existing) {
+    await FinishedStockBalance.create([{
+      productId,
+      inventoryUnit: "pack",
+      quantityPacks: 0,
+      reservedPacks: 0,
+      loosePieces: 0,
+      openingQuantityPacks: 0,
+      inventoryEffectiveDate: today(),
+      updatedBy: userId,
+    }], { session });
+  }
 }
 
 async function reserveOrderStock(order, userId, session) {
   const quantities = new Map();
   for (const item of order.items) {
-    if (!item.productId || !item.quantityPieces) throw invalid("Legacy order lines must be reviewed and replaced before stock can be reserved.", 409);
+    if (!item.productId || !Number.isInteger(item.packs) || item.packs < 1) throw invalid("Legacy order lines must be reviewed and replaced before stock can be reserved.", 409);
     const key = String(item.productId);
-    quantities.set(key, (quantities.get(key) ?? 0) + item.quantityPieces);
+    quantities.set(key, (quantities.get(key) ?? 0) + item.packs);
   }
-  for (const [productId, quantityPieces] of quantities) {
+  for (const [productId, quantityPacks] of quantities) {
     await ensureStockBalance(productId, userId, session);
     const result = await FinishedStockBalance.updateOne({
       productId,
-      $expr: { $gte: [{ $subtract: ["$quantityPieces", { $ifNull: ["$reservedPieces", 0] }] }, quantityPieces] },
-    }, { $inc: { reservedPieces: quantityPieces }, $set: { updatedBy: userId } }, { session });
+      $expr: { $gte: [{ $subtract: ["$quantityPacks", { $ifNull: ["$reservedPacks", 0] }] }, quantityPacks] },
+    }, { $inc: { reservedPacks: quantityPacks }, $set: { updatedBy: userId } }, { session });
     if (!result.modifiedCount) throw invalid("There is not enough unreserved finished stock to confirm this order.", 409);
   }
 }
@@ -194,13 +205,14 @@ async function releaseOrderReservation(order, userId, session) {
   const quantities = new Map();
   for (const item of order.items) {
     const key = String(item.productId);
-    quantities.set(key, (quantities.get(key) ?? 0) + item.quantityPieces);
+    if (!item.productId || !Number.isInteger(item.packs) || item.packs < 1) throw invalid("Legacy order lines cannot be safely released; contact an administrator.", 409);
+    quantities.set(key, (quantities.get(key) ?? 0) + item.packs);
   }
-  for (const [productId, quantityPieces] of quantities) {
+  for (const [productId, quantityPacks] of quantities) {
     const result = await FinishedStockBalance.updateOne({
       productId,
-      reservedPieces: { $gte: quantityPieces },
-    }, { $inc: { reservedPieces: -quantityPieces }, $set: { updatedBy: userId } }, { session });
+      reservedPacks: { $gte: quantityPacks },
+    }, { $inc: { reservedPacks: -quantityPacks }, $set: { updatedBy: userId } }, { session });
     if (!result.modifiedCount) throw invalid("The order stock reservation is inconsistent; contact an administrator.", 409);
   }
   order.reserved = false;
@@ -505,7 +517,9 @@ async function fulfillOrder(request, response) {
           productId: item.productId,
           type: "Sales dispatch",
           direction: "out",
-          quantityPieces: item.quantityPieces,
+          quantityPacks: item.packs,
+          packTypeSnapshot: item.packType,
+          piecesPerPackSnapshot: item.piecesPerPack,
           date,
           reference: receiptNumber,
           sourceType: "sale",

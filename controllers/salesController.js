@@ -555,6 +555,13 @@ async function listSales(request, response) {
   const rows = await Sale.find(filter).sort({ _id: -1 }).limit(limit + 1).lean();
   const hasMore = rows.length > limit;
   const page = hasMore ? rows.slice(0, limit) : rows;
+  const creatorIds = [...new Set(page
+    .filter((sale) => !sale.createdByName && !sale.legacyImported && sale.actor)
+    .map((sale) => String(sale.actor)))];
+  const creators = creatorIds.length
+    ? await User.find({ _id: { $in: creatorIds } }).select("_id name").lean()
+    : [];
+  const creatorNames = new Map(creators.map((user) => [String(user._id), user.name]));
   const ids = page.map((sale) => sale._id);
   const payments = ids.length ? await SalePayment.find({ saleId: { $in: ids } }).sort({ date: 1, _id: 1 }).lean() : [];
   const paymentsBySale = new Map();
@@ -567,6 +574,7 @@ async function listSales(request, response) {
     sales: page.map((sale) => ({
       ...serialize(sale),
       reference: sale.receiptNumber,
+      createdByName: sale.createdByName || creatorNames.get(String(sale.actor)) || "",
       payments: paymentsBySale.get(String(sale._id)) || [],
     })),
     nextCursor: hasMore ? String(page[page.length - 1]._id) : null,
@@ -577,9 +585,12 @@ async function getSale(request, response) {
   if (!validObjectId(request.params.id)) return response.status(400).json({ error: "Sale ID is invalid." });
   const sale = await Sale.findOne({ _id: request.params.id, voidedAt: null }).lean();
   if (!sale) return response.status(404).json({ error: "Sale not found." });
+  const creator = !sale.createdByName && !sale.legacyImported && sale.actor
+    ? await User.findById(sale.actor).select("_id name").lean()
+    : null;
   const payments = await SalePayment.find({ saleId: sale._id }).sort({ date: 1, _id: 1 }).lean();
   return response.json({
-    sale: { ...serialize(sale), reference: sale.receiptNumber },
+    sale: { ...serialize(sale), reference: sale.receiptNumber, createdByName: sale.createdByName || creator?.name || "" },
     payments: payments.map(serialize),
   });
 }
@@ -806,21 +817,27 @@ async function createSale(request, response) {
         paymentTerms: value.paymentTerms,
         dueDate: value.dueDate,
         actor: actorId(request),
+        createdByName: request.authUser.name || "",
         idempotencyKey: value.idempotencyKey,
         requestHash,
       }], { session });
       for (const [index, line] of saleLines.entries()) {
+        const packLabel = line.packType === "Box"
+          ? line.packs === 1 ? "box" : "boxes"
+          : line.packs === 1 ? "carton" : "cartons";
         await recordFinishedStockMovement({
           productId: line.productId,
           type: "Sales dispatch",
           direction: "out",
-          quantityPieces: line.quantityPieces,
+          quantityPacks: line.packs,
+          packTypeSnapshot: line.packType,
+          piecesPerPackSnapshot: line.piecesPerPack,
           date,
           reference: receiptNumber,
           sourceType: "sale",
           sourceId: sale._id,
           idempotencyKey: `${value.idempotencyKey}:${index}`,
-          reason: `Sale of ${line.packs} ${line.packType.toLowerCase()}${line.packs === 1 ? "" : "s"}`,
+          reason: `Sale of ${line.packs} ${packLabel}`,
           productName: line.productName,
           actor: actorId(request),
         }, session);

@@ -148,6 +148,7 @@ test("sales schemas enforce unique receipt, annual sequence, payment and idempot
     dueDate: "2026-11-01",
     actor: userId,
   });
+  assert.equal(sale.createdByName, "");
 
   test("legacy sales and payments validate for retryable history import", async () => {
     const legacySale = {

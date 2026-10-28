@@ -40,9 +40,14 @@ function captureAuthenticatedActivity(request, response, next) {
         ? "failure"
         : "success";
     const operation = isRead ? "read" : "write";
+    const eventOutcome = outcome === "success"
+      ? "succeeded"
+      : outcome === "denied"
+        ? "denied"
+        : "failed";
     void audit.recordAudit({
       request,
-      eventType: `data.${operation}.${outcome === "success" ? "succeeded" : outcome}`,
+      eventType: `data.${operation}.${eventOutcome}`,
       outcome,
       reason: outcome === "success" ? undefined : `http_${statusCode}`,
       resource,
@@ -52,7 +57,7 @@ function captureAuthenticatedActivity(request, response, next) {
         : undefined,
       details: { method: request.method, route, statusCode },
     }).catch((error) => {
-      console.error("Authenticated read audit write failed:", {
+      console.error("Authenticated activity audit write failed:", {
         route,
         statusCode,
         error,

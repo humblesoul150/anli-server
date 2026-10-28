@@ -34,11 +34,14 @@ router.put("/products/:id/recipe", writer, controller.changeRecipe);
 
 router.get("/materials", reader, controller.listMaterials);
 router.post("/materials", writer, controller.createMaterial);
+router.patch("/materials/:materialId", writer, controller.updateMaterial);
+router.delete("/materials/:materialId", writer, controller.deleteMaterial);
 router.get("/materials/responsible-users", reader, controller.listInventoryResponsibleUsers);
 router.get("/materials/low-stock", reader, controller.listLowStockAlerts);
 router.get("/materials/receipts", reader, controller.listMaterialReceipts);
 router.get("/materials/production-usages", reader, controller.listProductionMaterialUsages);
 router.post("/materials/production-usages", writer, controller.postProductionMaterialUsage);
+router.patch("/materials/production-usages/:id", writer, controller.updateProductionMaterialUsage);
 router.put("/materials/:materialId/locations/:location", writer, controller.configureMaterialLocation);
 router.post("/materials/:materialId/receipts", writer, controller.receiveRawMaterial);
 router.get("/materials/movements", reader, controller.listRawMovements);
@@ -51,6 +54,7 @@ router.post("/stock/finished/receipts", writer, controller.receiveFinishedStock)
 router.post("/stock/finished/adjustments", writer, controller.adjustFinishedStock);
 
 router.get("/runs", reader, controller.listProductionRuns);
+router.get("/runs/daily-stock-summary", reader, controller.getDailyProductionStockSummary);
 router.post("/runs", writer, controller.createProductionRun);
 
 router.requireProductionReader = requireRoles(readRoles);

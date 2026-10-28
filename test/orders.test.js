@@ -6,12 +6,18 @@ const OrderSequence = require("../models/orderSequence");
 const { validateOrderFields } = require("../controllers/ordersController");
 
 const productId = "507f1f77bcf86cd799439013";
+const workDate = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Africa/Kampala",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+}).format(new Date());
 
 function validOrder(overrides = {}) {
   return {
     customerId: "C-100",
     items: [{ productId, packs: 2 }],
-    requestedDate: "2026-10-24",
+    requestedDate: workDate,
     fulfilmentMethod: "Delivery",
     paymentTerms: "Same-day",
     priority: "Normal",

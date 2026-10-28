@@ -64,6 +64,15 @@ function pageSize(value) {
   return Number.isInteger(parsed) ? Math.min(MAX_PAGE_SIZE, Math.max(1, parsed)) : 100;
 }
 
+function companyWorkDate() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Africa/Kampala",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
 function serialize(document) {
   if (!document) return document;
   if (document.toJSON) return document.toJSON();
@@ -116,13 +125,7 @@ function validateProduct(body, partial = false) {
     const packType = body.packType === "" || body.packType === null ? undefined : body.packType;
     if (packType !== undefined && !["Box", "Carton"].includes(packType)) return { error: "Outer pack type must be Box or Carton." };
     if (packType === undefined) {
-      if ((body.piecesPerPack !== undefined && body.piecesPerPack !== "" && body.piecesPerPack !== null)
-        || (body.packWeightKg !== undefined && body.packWeightKg !== "" && body.packWeightKg !== null)) {
-        return { error: "Choose a box or carton when specifying pack details." };
-      }
-      product.packType = undefined;
-      product.piecesPerPack = undefined;
-      product.packWeightKg = undefined;
+      return { error: "Every finished product must have one configured box or carton as its sellable unit." };
     } else {
       const pieces = Number(body.piecesPerPack);
       const weight = Number(body.packWeightKg);
@@ -147,6 +150,86 @@ function validateProduct(body, partial = false) {
     product.ingredients = validation.value;
   }
   return { value: product };
+}
+
+function validatePackagingLevels(value, baseUnit) {
+  if (!Array.isArray(value) || value.length > 6) {
+    return { error: "Packaging levels must be an array of at most 6 levels." };
+  }
+  const names = new Set();
+  const levels = [];
+  let baseUnitsPerPackage = 1;
+  for (const [index, item] of value.entries()) {
+    if (!item || typeof item !== "object" || Array.isArray(item)
+      || Object.keys(item).some((key) => !["name", "quantity"].includes(key))) {
+      return { error: "Each packaging level must contain only a name and quantity." };
+    }
+    if (typeof item.name !== "string" || typeof item.quantity !== "number"
+      || !Number.isFinite(item.quantity) || item.quantity <= 0 || item.quantity > 1_000_000_000) {
+      return { error: "Packaging names must be text and quantities must be positive finite numbers." };
+    }
+    const name = item.name.trim();
+    const key = name.toLocaleLowerCase();
+    if (!name || name.length > 40 || key === baseUnit.trim().toLocaleLowerCase() || names.has(key)) {
+      return { error: "Packaging level names must be unique, non-empty, and different from the base unit." };
+    }
+    if (index > 0 && !Number.isInteger(item.quantity)) {
+      return { error: "Nested package quantities must be whole numbers of the previous package." };
+    }
+    baseUnitsPerPackage *= item.quantity;
+    if (!Number.isFinite(baseUnitsPerPackage) || baseUnitsPerPackage > 1_000_000_000_000) {
+      return { error: "Packaging conversion is too large." };
+    }
+    names.add(key);
+    levels.push({ name, quantity: item.quantity });
+  }
+  return { value: levels };
+}
+
+function packagingConversions(material) {
+  let baseUnitsPerPackage = 1;
+  return (material.packagingLevels ?? []).map((level) => {
+    baseUnitsPerPackage *= level.quantity;
+    return { name: level.name, baseUnitsPerPackage };
+  });
+}
+
+function validateMaterialInput(body) {
+  if (!requestObject(body, ["code", "name", "category", "unit", "packagingLevels"])
+    || typeof body.code !== "string" || typeof body.name !== "string"
+    || typeof body.unit !== "string"
+    || (body.category !== undefined && typeof body.category !== "string")) {
+    return { error: "Provide material code, name, category, and unit." };
+  }
+  const code = body.code.trim();
+  const name = body.name.trim();
+  const category = String(body.category || "General").trim();
+  const unit = body.unit.trim();
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,39}$/.test(code) || !name || name.length > 160
+    || !category || category.length > 80 || !unit || unit.length > 24) {
+    return { error: "Material code, name, category, and unit are invalid." };
+  }
+  const packaging = validatePackagingLevels(body.packagingLevels ?? [], unit);
+  if (packaging.error) return packaging;
+  return { value: { code, name, category, unit, packagingLevels: packaging.value } };
+}
+
+async function hasCurrentOrPendingRecipeUsage(materialId, session) {
+  const recipes = await ProductionRecipe.find({ "ingredients.materialId": materialId })
+    .select("_id").session(session).lean();
+  if (!recipes.length) return false;
+  const recipeIds = recipes.map((recipe) => recipe._id);
+  const [currentRecipe, pendingRuns] = await Promise.all([
+    FinishedProduct.exists({ activeRecipeId: { $in: recipeIds } }).session(session),
+    ProductionRun.find({ recipeId: { $in: recipeIds } }).select("_id").session(session).lean(),
+  ]);
+  if (currentRecipe) return true;
+  if (!pendingRuns.length) return false;
+  const postedRunIds = await ProductionMaterialUsage.distinct("productionRunId", {
+    productionRunId: { $in: pendingRuns.map((run) => run._id) },
+  }).session(session);
+  const postedRunIdSet = new Set(postedRunIds.map(String));
+  return pendingRuns.some((run) => !postedRunIdSet.has(String(run._id)));
 }
 
 function validateIngredients(value, allowEmpty = false) {
@@ -210,9 +293,11 @@ async function listProducts(_request, response) {
   return response.json({
     products: products.map((product) => ({
       ...serialize(product),
-      balancePieces: balanceMap.get(String(product._id))?.quantityPieces ?? 0,
-      reservedPieces: balanceMap.get(String(product._id))?.reservedPieces ?? 0,
-      availablePieces: Math.max(0, (balanceMap.get(String(product._id))?.quantityPieces ?? 0) - (balanceMap.get(String(product._id))?.reservedPieces ?? 0)),
+      balancePacks: balanceMap.get(String(product._id))?.quantityPacks ?? 0,
+      reservedPacks: balanceMap.get(String(product._id))?.reservedPacks ?? 0,
+      availablePacks: Math.max(0, (balanceMap.get(String(product._id))?.quantityPacks ?? 0) - (balanceMap.get(String(product._id))?.reservedPacks ?? 0)),
+      loosePieces: balanceMap.get(String(product._id))?.loosePieces ?? 0,
+      inventoryEffectiveDate: balanceMap.get(String(product._id))?.inventoryEffectiveDate ?? companyWorkDate(),
       recipe: recipeMap.has(String(product.activeRecipeId)) ? serialize(recipeMap.get(String(product.activeRecipeId))) : null,
     })),
   });
@@ -235,7 +320,12 @@ async function createProduct(request, response) {
       }], { session });
       await FinishedStockBalance.create([{
         productId: product._id,
-        quantityPieces: 0,
+        inventoryUnit: "pack",
+        quantityPacks: 0,
+        reservedPacks: 0,
+        loosePieces: 0,
+        openingQuantityPacks: 0,
+        inventoryEffectiveDate: companyWorkDate(),
         updatedBy: actorId(request),
       }], { session });
       let recipe = null;
@@ -257,7 +347,17 @@ async function createProduct(request, response) {
         details: { productId: String(product._id), code: product.code, name: product.name, recipeVersion: recipe?.version },
         transaction: session,
       });
-      return { product: { ...serialize(product), balancePieces: 0, recipe: recipe ? serialize(recipe) : null } };
+      return {
+        product: {
+          ...serialize(product),
+          balancePacks: 0,
+          reservedPacks: 0,
+          availablePacks: 0,
+          loosePieces: 0,
+          inventoryEffectiveDate: companyWorkDate(),
+          recipe: recipe ? serialize(recipe) : null,
+        },
+      };
     });
     return response.status(201).json(result);
   } catch (error) {
@@ -300,13 +400,16 @@ async function updateProduct(request, response) {
         throw missingRecipe;
       }
       const unitChanged = value.unit && value.unit !== record.unit;
-      if (unitChanged) {
-        const [balance, hasRuns] = await Promise.all([
+      const packChanged = (own(value, "packType") && value.packType !== record.packType)
+        || (own(value, "piecesPerPack") && value.piecesPerPack !== record.piecesPerPack);
+      if (unitChanged || packChanged) {
+        const [balance, hasRuns, hasMovements] = await Promise.all([
           FinishedStockBalance.findOne({ productId: record._id }).session(session).lean(),
           ProductionRun.exists({ productId: record._id }).session(session),
+          FinishedStockMovement.exists({ productId: record._id }).session(session),
         ]);
-        if ((balance?.quantityPieces ?? 0) > 0 || hasRuns) {
-          const immutableUnit = new Error("The product's sellable unit cannot change after stock or production history exists.");
+        if ((balance?.quantityPacks ?? 0) > 0 || (balance?.loosePieces ?? 0) > 0 || hasRuns || hasMovements) {
+          const immutableUnit = new Error("The product's sellable unit and pack size cannot change after stock or production history exists.");
           immutableUnit.statusCode = 409;
           throw immutableUnit;
         }
@@ -373,20 +476,9 @@ async function listMaterials(_request, response) {
 }
 
 async function createMaterial(request, response) {
-  if (!requestObject(request.body, ["code", "name", "category", "unit"])
-    || typeof request.body.code !== "string" || typeof request.body.name !== "string"
-    || typeof request.body.unit !== "string"
-    || (request.body.category !== undefined && typeof request.body.category !== "string")) {
-    return statusError(response, 400, "Provide material code, name, category, and unit.");
-  }
-  const code = request.body.code.trim();
-  const name = request.body.name.trim();
-  const category = String(request.body.category || "General").trim();
-  const unit = request.body.unit.trim();
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,39}$/.test(code) || !name || name.length > 160
-    || !category || category.length > 80 || !unit || unit.length > 24) {
-    return statusError(response, 400, "Material code, name, category, and unit are invalid.");
-  }
+  const validation = validateMaterialInput(request.body);
+  if (validation.error) return statusError(response, 400, validation.error);
+  const { code, name, category, unit, packagingLevels } = validation.value;
   try {
     const result = await withTransaction(async (session) => {
       const [material] = await RawMaterial.create([{
@@ -394,6 +486,7 @@ async function createMaterial(request, response) {
         name,
         category,
         unit,
+        packagingLevels,
         createdBy: actorId(request),
         updatedBy: actorId(request),
       }], { session });
@@ -467,21 +560,187 @@ async function changeRecipe(request, response) {
   }
 }
 
+function validateReceiptInput(body, material) {
+  const allowed = [
+    "quantity", "date", "reference", "reason", "idempotencyKey", "location",
+    "supplier", "sourceReference", "unitCost", "packageUnit", "packageQuantity",
+    "packagePrice",
+  ];
+  if (!requestObject(body, allowed)) return { error: "Receipt contains unsupported fields." };
+  if (!validDate(body.date) || typeof body.reason !== "string"
+    || !body.reason.trim() || body.reason.trim().length > 300) {
+    return { error: "Provide a valid receipt date and reason." };
+  }
+  const hasPackageInput = ["packageUnit", "packageQuantity", "packagePrice"].some((key) => own(body, key));
+  if (hasPackageInput) {
+    if (own(body, "quantity") || own(body, "unitCost")) {
+      return { error: "Use package quantity and package price, not base-unit quantity or unit cost." };
+    }
+    if (!own(body, "packageUnit") || !own(body, "packageQuantity") || !own(body, "packagePrice")
+      || typeof body.packageUnit !== "string" || !body.packageUnit.trim()
+      || typeof body.packageQuantity !== "number" || !Number.isInteger(body.packageQuantity)
+      || !positive(body.packageQuantity) || body.packageQuantity > 1_000_000_000
+      || typeof body.packagePrice !== "number" || !Number.isFinite(body.packagePrice) || body.packagePrice < 0) {
+      return { error: "Choose a configured package unit, enter a positive whole package count, and enter a non-negative package price." };
+    }
+    const packageUnit = body.packageUnit.trim();
+    const conversion = packagingConversions(material).find((level) => level.name === packageUnit);
+    const isLegacyBaseUnit = !(material.packagingLevels ?? []).length && packageUnit === material.unit;
+    if (!conversion && !isLegacyBaseUnit) {
+      return { error: "Receipt unit must be a packaging level configured for this material." };
+    }
+    const baseUnitsPerPackage = conversion?.baseUnitsPerPackage ?? 1;
+    return {
+      value: {
+        quantity: body.packageQuantity * baseUnitsPerPackage,
+        unitCost: body.packagePrice / baseUnitsPerPackage,
+        receiptPackaging: {
+          packageQuantity: body.packageQuantity,
+          packageUnit,
+          baseUnitsPerPackage,
+          packagePrice: body.packagePrice,
+        },
+      },
+    };
+  }
+
+  if ((material.packagingLevels ?? []).length) {
+    return { error: "Select a configured package unit and enter its package price." };
+  }
+  if (typeof body.quantity !== "number" || !positive(body.quantity)
+    || (body.unitCost !== undefined && (typeof body.unitCost !== "number" || !Number.isFinite(body.unitCost) || body.unitCost < 0))) {
+    return { error: "Provide a positive base-unit quantity and a non-negative unit cost." };
+  }
+  return {
+    value: {
+      quantity: body.quantity,
+      unitCost: body.unitCost,
+      receiptPackaging: undefined,
+    },
+  };
+}
+
+async function updateMaterial(request, response) {
+  if (!validObjectId(request.params.materialId)) return statusError(response, 400, "Choose a valid raw material.");
+  const validation = validateMaterialInput(request.body);
+  if (validation.error) return statusError(response, 400, validation.error);
+  try {
+    const result = await withTransaction(async (session) => {
+      const material = await RawMaterial.findById(request.params.materialId).session(session);
+      if (!material) return { notFound: true };
+
+      const { code, name, category, unit, packagingLevels } = validation.value;
+      if (unit !== material.unit) {
+        const [movement, balance, productRecipes] = await Promise.all([
+          RawMaterialMovement.exists({ materialId: material._id }).session(session),
+          RawMaterialBalance.exists({
+            materialId: material._id,
+            $or: [{ quantity: { $gt: 0 } }, { reorderThreshold: { $gt: 0 } }],
+          }).session(session),
+          hasCurrentOrPendingRecipeUsage(material._id, session),
+        ]);
+        if (movement || balance || productRecipes) {
+          throw conflictError("The base unit cannot be changed after stock movements, non-zero balances or reorder thresholds, or current product recipes or pending production runs exist.");
+        }
+      }
+
+      material.code = code;
+      material.name = name;
+      material.category = category;
+      material.unit = unit;
+      material.packagingLevels = packagingLevels;
+      material.updatedBy = actorId(request);
+      await material.save({ session });
+      await audit.recordAudit({
+        request,
+        eventType: "production.material_updated",
+        outcome: "success",
+        details: { materialId: String(material._id), code, name, category, unit },
+        transaction: session,
+      });
+      return { material: serialize(material) };
+    });
+    if (result.notFound) return statusError(response, 404, "Raw material not found.");
+    return response.json(result);
+  } catch (error) {
+    return nextError(error, response);
+  }
+}
+
+async function deleteMaterial(request, response) {
+  if (!validObjectId(request.params.materialId)) return statusError(response, 400, "Choose a valid raw material.");
+  try {
+    const result = await withTransaction(async (session) => {
+      const material = await RawMaterial.findById(request.params.materialId).session(session);
+      if (!material) return { notFound: true };
+
+      if (await hasCurrentOrPendingRecipeUsage(material._id, session)) {
+        throw conflictError("This material is used by a current product recipe or a pending production run. Update the recipe or post the pending material use before deleting it.");
+      }
+
+      const [balances, preservedMovementCount] = await Promise.all([
+        RawMaterialBalance.find({ materialId: material._id }).session(session).lean(),
+        RawMaterialMovement.countDocuments({ materialId: material._id }).session(session),
+      ]);
+      const deletedStock = balances.reduce((total, balance) => total + balance.quantity, 0);
+      await RawMaterialBalance.deleteMany({ materialId: material._id }, { session });
+      await RawMaterialAlert.deleteMany({ materialId: material._id }, { session });
+      await RawMaterial.deleteOne({ _id: material._id }, { session });
+      await audit.recordAudit({
+        request,
+        eventType: "production.material_deleted",
+        outcome: "success",
+        details: {
+          materialId: String(material._id),
+          code: material.code,
+          name: material.name,
+          deletedStock,
+          deletedLocationCount: balances.length,
+          preservedMovementCount,
+        },
+        transaction: session,
+      });
+      return {
+        deleted: true,
+        materialId: String(material._id),
+        deletedUnit: material.unit,
+        deletedStock,
+        deletedLocationCount: balances.length,
+        preservedMovementCount,
+      };
+    });
+    if (result.notFound) return statusError(response, 404, "Raw material not found.");
+    return response.json(result);
+  } catch (error) {
+    return nextError(error, response);
+  }
+}
+
+function sameRawMaterialReceiptRequest(existing, input) {
+  return String(existing.materialId) === input.materialId
+    && ["Receipt", "Stock in"].includes(existing.type)
+    && existing.quantity === input.quantity
+    && existing.date === input.date
+    && existing.reason === input.reason
+    && (existing.toLocation || "Main Warehouse") === input.destination
+    && (input.reference === undefined || existing.receiptReference === input.reference)
+    && (existing.supplier || "") === (input.supplier || "")
+    && (existing.sourceReference || "") === (input.sourceReference || "")
+    && (existing.receiptPackaging?.packageQuantity ?? null) === (input.receiptPackaging?.packageQuantity ?? null)
+    && (existing.receiptPackaging?.packageUnit ?? null) === (input.receiptPackaging?.packageUnit ?? null)
+    && (existing.receiptPackaging?.baseUnitsPerPackage ?? null) === (input.receiptPackaging?.baseUnitsPerPackage ?? null)
+    && (existing.receiptPackaging?.packagePrice ?? existing.unitCost ?? null) === (input.receiptPackaging?.packagePrice ?? input.unitCost ?? null);
+}
+
 async function receiveRawMaterial(request, response) {
   const { materialId } = request.params;
-  const { quantity, date, reference, reason, idempotencyKey, location, supplier, sourceReference, unitCost } = request.body || {};
-  if (!requestObject(request.body, ["quantity", "date", "reference", "reason", "idempotencyKey", "location", "supplier", "sourceReference", "unitCost"])) {
-    return statusError(response, 400, "Receipt contains unsupported fields.");
-  }
-  if (!validObjectId(materialId) || !positive(Number(quantity)) || !validDate(date)
-    || typeof reason !== "string" || !reason.trim() || reason.trim().length > 300) {
-    return statusError(response, 400, "Provide a valid material, positive quantity, date, and receipt reason.");
-  }
+  const body = request.body || {};
+  const { date, reference, reason, idempotencyKey, location, supplier, sourceReference } = body;
+  if (!validObjectId(materialId)) return statusError(response, 400, "Provide a valid material ID.");
   const destination = typeof location === "string" && location.trim() ? location.trim() : "Main Warehouse";
   if (destination.length > 100 || (supplier !== undefined && (typeof supplier !== "string" || supplier.trim().length > 160))
-    || (sourceReference !== undefined && (typeof sourceReference !== "string" || sourceReference.trim().length > 120))
-    || (unitCost !== undefined && (!Number.isFinite(Number(unitCost)) || Number(unitCost) < 0))) {
-    return statusError(response, 400, "Location, supplier, source reference, or unit cost is invalid.");
+    || (sourceReference !== undefined && (typeof sourceReference !== "string" || sourceReference.trim().length > 120))) {
+    return statusError(response, 400, "Location, supplier, or source reference is invalid.");
   }
   if (reference !== undefined && (typeof reference !== "string" || reference.trim().length > 80)) {
     return statusError(response, 400, "Reference must be 80 characters or fewer.");
@@ -491,31 +750,43 @@ async function receiveRawMaterial(request, response) {
   }
   try {
     const result = await withTransaction(async (session) => {
-      if (idempotencyKey) {
-        const existing = await RawMaterialMovement.findOne({ idempotencyKey }).session(session).lean();
-        if (existing) {
-          const sameRequest = String(existing.materialId) === materialId
-            && ["Receipt", "Stock in"].includes(existing.type)
-            && existing.quantity === Number(quantity)
-            && existing.date === date
-            && existing.reason === reason.trim()
-            && (existing.toLocation || "Main Warehouse") === destination;
-          if (!sameRequest) throw conflictError("Idempotency key was already used for a different raw-material request.");
-          return { movement: serialize(existing), balance: await getRawMaterialBalance(materialId, session, destination) };
-        }
-      }
       const material = await RawMaterial.findOne({ _id: materialId, active: true }).session(session);
       if (!material) {
         const missing = new Error("Material not found or inactive.");
         missing.statusCode = 404;
         throw missing;
       }
-      const amount = Number(quantity);
+      const validation = validateReceiptInput(body, material);
+      if (validation.error) {
+        const invalidReceipt = new Error(validation.error);
+        invalidReceipt.statusCode = 400;
+        throw invalidReceipt;
+      }
+      const { quantity, unitCost, receiptPackaging } = validation.value;
+      if (idempotencyKey) {
+        const existing = await RawMaterialMovement.findOne({ idempotencyKey }).session(session).lean();
+        if (existing) {
+          const sameRequest = sameRawMaterialReceiptRequest(existing, {
+            materialId,
+            quantity,
+            date,
+            reason: reason.trim(),
+            destination,
+            reference: reference?.trim() || undefined,
+            supplier: supplier?.trim() || undefined,
+            sourceReference: sourceReference?.trim() || undefined,
+            receiptPackaging,
+            unitCost,
+          });
+          if (!sameRequest) throw conflictError("Idempotency key was already used for a different raw-material request.");
+          return { movement: serialize(existing), balance: await getRawMaterialBalance(materialId, session, destination) };
+        }
+      }
       const movement = await recordRawMaterialMovement({
         materialId: material._id,
         type: "Stock in",
         direction: "in",
-        quantity: amount,
+        quantity,
         date,
         reference: reference?.trim() || `RM-${randomUUID()}`,
         receiptReference: reference?.trim() || undefined,
@@ -525,7 +796,8 @@ async function receiveRawMaterial(request, response) {
         toLocation: destination,
         supplier: supplier?.trim() || undefined,
         sourceReference: sourceReference?.trim() || undefined,
-        unitCost: unitCost === undefined ? undefined : Number(unitCost),
+        unitCost,
+        receiptPackaging,
         materialName: material.name,
         unit: material.unit,
         actor: actorId(request),
@@ -534,7 +806,7 @@ async function receiveRawMaterial(request, response) {
         request,
         eventType: "inventory.raw_material_received",
         outcome: "success",
-        details: { materialId: String(material._id), location: destination, quantity: amount, unit: material.unit, movementId: String(movement._id) },
+        details: { materialId: String(material._id), location: destination, quantity, unit: material.unit, movementId: String(movement._id) },
         transaction: session,
       });
       return { movement: serialize(movement), balance: await getRawMaterialBalance(material._id, session, destination) };
@@ -740,23 +1012,52 @@ async function receiveRawMaterial(request, response) {
   }
 
 function validateProductionUsageInput(body) {
-  if (!requestObject(body, ["productionRunId", "tanksProduced", "location", "idempotencyKey"])) {
+  if (!requestObject(body, ["productionRunId", "productId", "productionDate", "tanksProduced", "location", "idempotencyKey"])) {
     return { error: "Production usage contains unsupported fields." };
   }
-  if (!validObjectId(body.productionRunId) || !positive(Number(body.tanksProduced))
+  const isRunBased = own(body, "productionRunId");
+  if (isRunBased === (own(body, "productId") || own(body, "productionDate"))
+    || (isRunBased && !validObjectId(body.productionRunId))
+    || (!isRunBased && (!validObjectId(body.productId) || !validDate(body.productionDate)))
+    || !positive(Number(body.tanksProduced))
     || typeof body.location !== "string" || !body.location.trim() || body.location.trim().length > 100) {
-    return { error: "Provide a valid production run, positive tank count, and stock location." };
+    return { error: "Provide either a valid production run or a product and production date, plus positive tank count and stock location." };
   }
   if (body.idempotencyKey !== undefined
     && (typeof body.idempotencyKey !== "string" || !body.idempotencyKey.trim() || body.idempotencyKey.length > 120)) {
     return { error: "Idempotency key must be 1–120 characters." };
   }
+  if (!isRunBased && body.idempotencyKey === undefined) {
+    return { error: "Direct product usage requires an idempotency key." };
+  }
   return {
     value: {
       productionRunId: body.productionRunId,
+      productId: body.productId,
+      productionDate: body.productionDate,
       tanksProduced: Number(body.tanksProduced),
       location: body.location.trim(),
       idempotencyKey: body.idempotencyKey?.trim(),
+    },
+  };
+}
+
+function validateProductionUsageUpdateInput(body) {
+  if (!requestObject(body, ["productId", "productionDate", "tanksProduced", "location"])
+    || !validObjectId(body.productId)
+    || !validDate(body.productionDate)
+    || !positive(Number(body.tanksProduced))
+    || typeof body.location !== "string"
+    || !body.location.trim()
+    || body.location.trim().length > 100) {
+    return { error: "Provide a valid product, production date, positive tank count, and stock location." };
+  }
+  return {
+    value: {
+      productId: body.productId,
+      productionDate: body.productionDate,
+      tanksProduced: Number(body.tanksProduced),
+      location: body.location.trim(),
     },
   };
 }
@@ -771,6 +1072,25 @@ function calculateProductionMaterialLines(ingredients, tanksProduced) {
   }));
 }
 
+function calculateProductionUsageStockDeltas(previousLines, previousLocation, nextLines, nextLocation) {
+  const deltas = new Map();
+  const addDelta = (line, location, quantity) => {
+    const key = `${String(line.materialId)}:${location}`;
+    const current = deltas.get(key) || {
+      materialId: line.materialId,
+      materialName: line.materialName,
+      unit: line.unit,
+      location,
+      delta: 0,
+    };
+    current.delta += quantity;
+    deltas.set(key, current);
+  };
+  for (const line of previousLines) addDelta(line, previousLocation, line.totalQuantity);
+  for (const line of nextLines) addDelta(line, nextLocation, -line.totalQuantity);
+  return [...deltas.values()].filter((item) => Math.abs(item.delta) >= 1e-9);
+}
+
 async function postProductionMaterialUsage(request, response) {
   const { value, error } = validateProductionUsageInput(request.body);
   if (error) return statusError(response, 400, error);
@@ -779,47 +1099,58 @@ async function postProductionMaterialUsage(request, response) {
       if (value.idempotencyKey) {
         const existing = await ProductionMaterialUsage.findOne({ idempotencyKey: value.idempotencyKey }).session(session).lean();
         if (existing) {
-          const sameRequest = String(existing.productionRunId) === value.productionRunId
+          const sameIdentity = value.productionRunId
+            ? String(existing.productionRunId ?? "") === value.productionRunId
+            : !existing.productionRunId
+              && String(existing.productId) === value.productId
+              && existing.productionDate === value.productionDate;
+          const sameRequest = sameIdentity
             && existing.tanksProduced === value.tanksProduced
             && existing.location === value.location;
           if (!sameRequest) throw conflictError("Idempotency key was already used for a different production-usage request.");
           return { usage: serialize(existing), replayed: true };
         }
       }
-      const run = await ProductionRun.findById(value.productionRunId).session(session);
-      if (!run) {
-        const missing = new Error("Post the finished-goods production run before recording its raw-material use.");
+      const run = value.productionRunId
+        ? await ProductionRun.findById(value.productionRunId).session(session)
+        : null;
+      if (value.productionRunId && !run) {
+        const missing = new Error("Production run not found.");
         missing.statusCode = 404;
         throw missing;
       }
-      const existingUsage = await ProductionMaterialUsage.findOne({ productionRunId: run._id }).session(session).lean();
-      if (existingUsage) throw conflictError("Raw-material usage has already been recorded for this production run.");
-      if (value.location.length > 100) {
-        const invalidLocation = new Error("Location must be 100 characters or fewer.");
-        invalidLocation.statusCode = 400;
-        throw invalidLocation;
+      if (run) {
+        const existingUsage = await ProductionMaterialUsage.findOne({ productionRunId: run._id }).session(session).lean();
+        if (existingUsage) throw conflictError("Raw-material usage has already been recorded for this production run.");
       }
-      const product = await FinishedProduct.findOne({ _id: run.productId, active: true }).session(session);
+      const product = await FinishedProduct.findOne({
+        _id: run?.productId ?? value.productId,
+        active: true,
+      }).session(session);
       if (!product) {
-        const missing = new Error("The production run product is missing or inactive.");
+        const missing = new Error("The selected product is missing or inactive.");
         missing.statusCode = 409;
         throw missing;
       }
-      if (!run.recipeId) {
-        const missingRecipe = new Error("The production run has no recipe snapshot. Save a per-tank product recipe before recording use.");
+      const recipeId = run ? run.recipeId : product.activeRecipeId;
+      if (!recipeId) {
+        const missingRecipe = new Error("The selected product has no saved recipe. Add a recipe before recording its material use.");
         missingRecipe.statusCode = 409;
         throw missingRecipe;
       }
-      const recipe = await ProductionRecipe.findById(run.recipeId).session(session).lean();
-      if (!recipe || recipe.tankVolumeLitres !== 1000 || !recipe.ingredients.length) {
-        const missingRecipe = new Error("The production run recipe is missing or does not use the 1,000-litre tank basis.");
+      const recipe = await ProductionRecipe.findById(recipeId).session(session).lean();
+      if (!recipe || String(recipe.productId) !== String(product._id)
+        || recipe.tankVolumeLitres !== 1000 || !recipe.ingredients.length) {
+        const missingRecipe = new Error("The selected recipe is missing or does not use the 1,000-litre tank basis.");
         missingRecipe.statusCode = 409;
         throw missingRecipe;
       }
+      const productionDate = run?.productionDate ?? value.productionDate;
+      const productName = run?.productName ?? product.name;
       const lines = [];
       for (const ingredient of recipe.ingredients) {
         const material = await RawMaterial.findOne({ _id: ingredient.materialId, active: true }).session(session);
-        if (!material || material.name !== ingredient.materialName || material.unit !== ingredient.unit) {
+        if (!material || material.unit !== ingredient.unit) {
           const invalidRecipe = new Error("A recipe ingredient is missing or inactive. Update the product recipe before recording use.");
           invalidRecipe.statusCode = 409;
           throw invalidRecipe;
@@ -841,7 +1172,7 @@ async function postProductionMaterialUsage(request, response) {
             { fromLocation: { $exists: false }, toLocation: { $exists: false } },
           ],
         }).sort({ date: -1, createdAt: -1 }).session(session).lean();
-        if (latestMovement && latestMovement.date > run.productionDate) {
+        if (latestMovement && latestMovement.date > productionDate) {
           throw conflictError(`Production date is earlier than the latest stock movement for ${material.name} at ${value.location}.`);
         }
         lines.push({
@@ -855,10 +1186,10 @@ async function postProductionMaterialUsage(request, response) {
       const reference = `USE-${randomUUID()}`;
       const [usage] = await ProductionMaterialUsage.create([{
         reference,
-        productionRunId: run._id,
-        productId: run.productId,
-        productName: run.productName,
-        productionDate: run.productionDate,
+        ...(run ? { productionRunId: run._id } : {}),
+        productId: product._id,
+        productName,
+        productionDate,
         tanksProduced: value.tanksProduced,
         tankVolumeLitres: 1000,
         location: value.location,
@@ -874,11 +1205,11 @@ async function postProductionMaterialUsage(request, response) {
           type: "Production use",
           direction: "out",
           quantity: line.totalQuantity,
-          date: run.productionDate,
+          date: productionDate,
           reference,
           sourceType: "production-usage",
           sourceId: usage._id,
-          reason: `${value.tanksProduced} × 1,000-litre tanks of ${run.productName}`,
+          reason: `${value.tanksProduced} × 1,000-litre tanks of ${productName}`,
           fromLocation: value.location,
           materialName: line.materialName,
           unit: line.unit,
@@ -891,9 +1222,9 @@ async function postProductionMaterialUsage(request, response) {
         outcome: "success",
         details: {
           productionUsageId: String(usage._id),
-          productionRunId: String(run._id),
+          productionRunId: run ? String(run._id) : undefined,
           reference,
-          productId: String(run.productId),
+          productId: String(product._id),
           tanksProduced: value.tanksProduced,
           tankVolumeLitres: 1000,
           ingredientCount: lines.length,
@@ -903,6 +1234,148 @@ async function postProductionMaterialUsage(request, response) {
       return { usage: serialize(usage), replayed: false };
     });
     return response.status(result.replayed ? 200 : 201).json(result);
+  } catch (error) {
+    return nextError(error, response);
+  }
+}
+
+async function updateProductionMaterialUsage(request, response) {
+  if (!validObjectId(request.params.id)) return statusError(response, 400, "Production usage id is invalid.");
+  const { value, error } = validateProductionUsageUpdateInput(request.body);
+  if (error) return statusError(response, 400, error);
+  try {
+    const result = await withTransaction(async (session) => {
+      const usage = await ProductionMaterialUsage.findById(request.params.id).session(session);
+      if (!usage) {
+        const missing = new Error("Production material usage record not found.");
+        missing.statusCode = 404;
+        throw missing;
+      }
+      if (usage.productionRunId) {
+        throw conflictError("Legacy run-linked production usage is read-only. Update the production run through its supported workflow.");
+      }
+
+      const product = await FinishedProduct.findOne({ _id: value.productId, active: true }).session(session);
+      if (!product) throw conflictError("The selected product is missing or inactive.");
+      if (!product.activeRecipeId) {
+        throw conflictError("The selected product has no saved recipe. Add a recipe before editing material use.");
+      }
+      const recipe = await ProductionRecipe.findById(product.activeRecipeId).session(session).lean();
+      if (!recipe || String(recipe.productId) !== String(product._id)
+        || recipe.tankVolumeLitres !== 1000 || !recipe.ingredients.length) {
+        throw conflictError("The selected recipe is missing or does not use the 1,000-litre tank basis.");
+      }
+
+      const materialsById = new Map();
+      const newIngredients = [];
+      for (const ingredient of recipe.ingredients) {
+        const material = await RawMaterial.findOne({ _id: ingredient.materialId, active: true }).session(session);
+        if (!material || material.unit !== ingredient.unit) {
+          throw conflictError("A recipe ingredient is missing or inactive. Update the product recipe before editing use.");
+        }
+        const locationBalance = await RawMaterialBalance.findOne({
+          materialId: material._id,
+          location: value.location,
+        }).session(session).lean();
+        if (!locationBalance) {
+          throw conflictError(`${material.name} has no inventory configured at ${value.location}.`);
+        }
+        materialsById.set(String(material._id), material);
+        newIngredients.push({
+          materialId: material._id,
+          materialName: material.name,
+          unit: material.unit,
+          quantityPerTank: ingredient.quantityPerTank,
+        });
+      }
+      const newLines = calculateProductionMaterialLines(newIngredients, value.tanksProduced);
+      for (const line of usage.lines) {
+        const materialId = String(line.materialId);
+        let material = materialsById.get(materialId);
+        if (!material) {
+          material = await RawMaterial.findById(line.materialId).session(session);
+          if (!material || material.unit !== line.unit) {
+            throw conflictError(`The previously used material ${line.materialName} is missing or has changed units; this record cannot be safely edited.`);
+          }
+          materialsById.set(materialId, material);
+        }
+        const oldBalance = await RawMaterialBalance.findOne({
+          materialId: line.materialId,
+          location: usage.location,
+        }).session(session).lean();
+        if (!oldBalance) {
+          throw conflictError(`${line.materialName} no longer has inventory configured at ${usage.location}; this record cannot be safely edited.`);
+        }
+      }
+      const stockDeltas = calculateProductionUsageStockDeltas(usage.lines, usage.location, newLines, value.location);
+
+      const correctionDate = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Africa/Kampala",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date());
+      const correctionReference = `${usage.reference}-E-${randomUUID()}`;
+      for (const delta of stockDeltas) {
+        const direction = delta.delta > 0 ? "in" : "out";
+        await recordRawMaterialMovement({
+          materialId: delta.materialId,
+          type: "Production use correction",
+          direction,
+          quantity: Math.abs(delta.delta),
+          date: correctionDate,
+          reference: correctionReference,
+          sourceType: "production-usage-correction",
+          sourceId: usage._id,
+          reason: `Correction for production usage ${usage.reference}`,
+          ...(direction === "in" ? { toLocation: delta.location } : { fromLocation: delta.location }),
+          materialName: delta.materialName,
+          unit: delta.unit,
+          actor: actorId(request),
+        }, session);
+      }
+
+      const previous = {
+        productId: String(usage.productId),
+        productionDate: usage.productionDate,
+        tanksProduced: usage.tanksProduced,
+        location: usage.location,
+        recipeVersion: usage.recipeVersion,
+      };
+      usage.productId = product._id;
+      usage.productName = product.name;
+      usage.productionDate = value.productionDate;
+      usage.tanksProduced = value.tanksProduced;
+      usage.location = value.location;
+      usage.recipeId = recipe._id;
+      usage.recipeVersion = recipe.version;
+      usage.lines = newLines;
+      usage.updatedBy = actorId(request);
+      await usage.save({ session });
+
+      await audit.recordAudit({
+        request,
+        eventType: "inventory.production_material_usage_updated",
+        outcome: "success",
+        details: {
+          productionUsageId: String(usage._id),
+          reference: usage.reference,
+          correctionReference,
+          previous,
+          updated: {
+            productId: String(product._id),
+            productionDate: value.productionDate,
+            tanksProduced: value.tanksProduced,
+            location: value.location,
+            recipeVersion: recipe.version,
+          },
+          correctionMovementCount: stockDeltas.length,
+        },
+        transaction: session,
+      });
+      return { usage: serialize(usage) };
+    });
+    return response.json(result);
   } catch (error) {
     return nextError(error, response);
   }
@@ -945,13 +1418,13 @@ async function adjustFinishedStock(request, response) {
 
 async function postFinishedMovement(request, response, direction, adjustment = false) {
   const allowed = adjustment
-    ? ["productId", "direction", "quantityPieces", "date", "reason", "reference", "idempotencyKey"]
-    : ["productId", "quantityPieces", "date", "reason", "reference", "idempotencyKey"];
+    ? ["productId", "direction", "quantityPacks", "date", "reason", "reference", "idempotencyKey"]
+    : ["productId", "quantityPacks", "date", "reason", "reference", "idempotencyKey"];
   if (!requestObject(request.body, allowed)) return statusError(response, 400, "Movement contains unsupported fields.");
-  const { productId, quantityPieces, date, reason, reference, idempotencyKey } = request.body;
-  if (!validObjectId(productId) || !Number.isInteger(Number(quantityPieces)) || Number(quantityPieces) <= 0 || !validDate(date)
+  const { productId, quantityPacks, date, reason, reference, idempotencyKey } = request.body;
+  if (!validObjectId(productId) || !Number.isInteger(Number(quantityPacks)) || Number(quantityPacks) <= 0 || !validDate(date)
     || typeof reason !== "string" || !reason.trim() || reason.trim().length > 300) {
-    return statusError(response, 400, "Provide a valid product, positive quantity, date, and reason.");
+    return statusError(response, 400, "Provide a valid product, positive whole-pack quantity, date, and reason.");
   }
   if (reference !== undefined && (typeof reference !== "string" || reference.trim().length > 80)) {
     return statusError(response, 400, "Reference must be 80 characters or fewer.");
@@ -970,11 +1443,12 @@ async function postFinishedMovement(request, response, direction, adjustment = f
           const sameRequest = String(existing.productId) === productId
             && existing.direction === direction
             && existing.type === expectedType
-            && existing.quantityPieces === Number(quantityPieces)
+            && existing.inventoryUnit === "pack"
+            && existing.quantityPacks === Number(quantityPacks)
             && existing.date === date
             && existing.reason === reason.trim();
           if (!sameRequest) throw conflictError("Idempotency key was already used for a different finished-stock request.");
-          return { movement: serialize(existing), balancePieces: await getFinishedBalance(productId, session) };
+          return { movement: serialize(existing), balancePacks: await getFinishedBalance(productId, session) };
         }
       }
       const product = await FinishedProduct.findOne({ _id: productId, active: true }).session(session);
@@ -983,7 +1457,26 @@ async function postFinishedMovement(request, response, direction, adjustment = f
         missing.statusCode = 404;
         throw missing;
       }
-      const amount = Number(quantityPieces);
+      if (!product.packType || !Number.isInteger(product.piecesPerPack) || product.piecesPerPack < 1) {
+        throw conflictError("Configure this product's box or carton size before recording finished stock.");
+      }
+      if (date > companyWorkDate()) {
+        throw conflictError("Finished-stock movements cannot be dated in the future.");
+      }
+      const balance = await FinishedStockBalance.findOne({ productId: product._id }).session(session).lean();
+      const effectiveDate = balance?.inventoryEffectiveDate ?? companyWorkDate();
+      if (date < effectiveDate) {
+        throw conflictError(`Pack-based finished-stock movements can only be dated on or after ${effectiveDate}.`);
+      }
+      const laterMovement = await FinishedStockMovement.findOne({
+        productId: product._id,
+        inventoryUnit: "pack",
+        date: { $gt: date },
+      }).session(session).lean();
+      if (laterMovement) {
+        throw conflictError("Finished-stock movements cannot be backdated before a later pack-based movement.");
+      }
+      const amount = Number(quantityPacks);
       const type = adjustment
         ? direction === "in" ? "Adjustment increase" : "Adjustment decrease"
         : "Other stock in";
@@ -991,7 +1484,10 @@ async function postFinishedMovement(request, response, direction, adjustment = f
         productId: product._id,
         type,
         direction,
-        quantityPieces: amount,
+        inventoryUnit: "pack",
+        quantityPacks: amount,
+        packTypeSnapshot: product.packType,
+        piecesPerPackSnapshot: product.piecesPerPack,
         date,
         reference: reference?.trim() || `FG-${randomUUID()}`,
         sourceType: adjustment ? "adjustment" : "receipt",
@@ -1004,10 +1500,10 @@ async function postFinishedMovement(request, response, direction, adjustment = f
         request,
         eventType: adjustment ? "production.finished_stock_adjusted" : "production.finished_stock_received",
         outcome: "success",
-        details: { productId: String(product._id), quantityPieces: amount, direction, movementId: String(movement._id), reason: reason.trim() },
+        details: { productId: String(product._id), quantityPacks: amount, packType: product.packType, direction, movementId: String(movement._id), reason: reason.trim() },
         transaction: session,
       });
-      return { movement: serialize(movement), balancePieces: await getFinishedBalance(product._id, session) };
+      return { movement: serialize(movement), balancePacks: await getFinishedBalance(product._id, session) };
     });
     return response.status(201).json(result);
   } catch (error) {
@@ -1094,15 +1590,88 @@ async function listProductionRuns(request, response) {
   return response.json({ runs: runs.map(serialize) });
 }
 
+async function dailyStockSummary(productId, date, session) {
+  const balanceQuery = FinishedStockBalance.findOne({ productId });
+  if (session) balanceQuery.session(session);
+  const balance = await balanceQuery.lean();
+  if (!balance || balance.inventoryUnit !== "pack") {
+    throw conflictError("Finished stock has not been migrated to box/carton units. Run the finished-stock migration first.");
+  }
+  if (date < balance.inventoryEffectiveDate) {
+    throw conflictError(`Pack-based daily stock records can only be posted on or after ${balance.inventoryEffectiveDate}.`);
+  }
+  const productQuery = FinishedProduct.findById(productId);
+  if (session) productQuery.session(session);
+  const product = await productQuery.lean();
+  if (!product?.packType || !Number.isInteger(product.piecesPerPack) || product.piecesPerPack < 1) {
+    throw conflictError("Configure this product's box or carton size before recording daily production.");
+  }
+  const latestMovementQuery = FinishedStockMovement.findOne({
+    productId,
+    inventoryUnit: "pack",
+    date: { $gt: date },
+  }).sort({ date: -1 });
+  if (session) latestMovementQuery.session(session);
+  if (await latestMovementQuery.lean()) {
+    throw conflictError("Daily production must be posted on or after the latest finished-stock movement date.");
+  }
+  const movementQuery = FinishedStockMovement.find({ productId, inventoryUnit: "pack", date });
+  if (session) movementQuery.session(session);
+  const movements = await movementQuery.lean();
+  const netFor = (movement) => movement.direction === "in" ? movement.quantityPacks : -movement.quantityPacks;
+  const dayNet = movements.reduce((total, movement) => total + netFor(movement), 0);
+  const salesQuantityPacks = movements
+    .filter((movement) => movement.type === "Sales dispatch")
+    .reduce((total, movement) => total + movement.quantityPacks, 0);
+  const otherMovementNetPacks = movements
+    .filter((movement) => !["Sales dispatch", "Production", "Damage/write-off"].includes(movement.type))
+    .reduce((total, movement) => total + netFor(movement), 0);
+  return {
+    product,
+    balance,
+    openingStockPacks: balance.quantityPacks - dayNet,
+    salesQuantityPacks,
+    otherMovementNetPacks,
+    piecesPerPack: product.piecesPerPack,
+    packType: product.packType,
+  };
+}
+
+function calculateProducedPacks({ closingStockPacks, salesQuantityPacks, damagedQuantityPacks, openingStockPacks, otherMovementNetPacks }) {
+  return closingStockPacks + salesQuantityPacks + damagedQuantityPacks - openingStockPacks - otherMovementNetPacks;
+}
+
+async function getDailyProductionStockSummary(request, response) {
+  const { productId, date } = request.query;
+  if (!validObjectId(productId)) return statusError(response, 400, "productId is invalid.");
+  if (!validDate(date)) return statusError(response, 400, "Production date must be a valid YYYY-MM-DD date.");
+  try {
+    const summary = await dailyStockSummary(productId, date);
+    return response.json({
+      productId,
+      productionDate: date,
+      packType: summary.packType,
+      piecesPerPack: summary.piecesPerPack,
+      openingStockPacks: summary.openingStockPacks,
+      salesQuantityPacks: summary.salesQuantityPacks,
+      otherMovementNetPacks: summary.otherMovementNetPacks,
+      loosePieces: summary.balance.loosePieces ?? 0,
+    });
+  } catch (error) {
+    return nextError(error, response);
+  }
+}
+
 function validateProductionInput(body) {
-  const allowed = ["productId", "productionDate", "openingStockPieces", "salesQuantityPieces", "damagedQuantityPieces", "closingStockPieces", "damageReason", "idempotencyKey"];
+  const allowed = ["productId", "productionDate", "openingStockPacks", "damagedQuantityPacks", "closingStockPacks", "damageReason", "idempotencyKey"];
   if (!requestObject(body, allowed)) return { error: "Production record contains unsupported fields." };
   if (!validObjectId(body.productId)) return { error: "Choose a valid product." };
   if (!validDate(body.productionDate)) return { error: "Production date must be a valid YYYY-MM-DD date." };
-  for (const field of ["openingStockPieces", "damagedQuantityPieces", "closingStockPieces"]) {
-    if (!Number.isInteger(Number(body[field])) || Number(body[field]) < 0) return { error: `${field} must be a non-negative whole number of pieces.` };
+  if (body.productionDate > companyWorkDate()) return { error: "Production date cannot be in the future." };
+  for (const field of ["openingStockPacks", "damagedQuantityPacks", "closingStockPacks"]) {
+    if (!Number.isInteger(Number(body[field])) || Number(body[field]) < 0) return { error: `${field} must be a non-negative whole number of boxes or cartons.` };
   }
-  if (Number(body.damagedQuantityPieces) > 0 && (typeof body.damageReason !== "string" || !body.damageReason.trim())) {
+  if (Number(body.damagedQuantityPacks) > 0 && (typeof body.damageReason !== "string" || !body.damageReason.trim())) {
     return { error: "A damage reason is required when damaged quantity is greater than zero." };
   }
   if (body.damageReason !== undefined && (typeof body.damageReason !== "string" || body.damageReason.trim().length > 300)) {
@@ -1111,17 +1680,14 @@ function validateProductionInput(body) {
   if (body.idempotencyKey !== undefined && (typeof body.idempotencyKey !== "string" || !body.idempotencyKey.trim() || body.idempotencyKey.length > 120)) {
     return { error: "Idempotency key must be 1–120 characters." };
   }
-  const salesQuantityPieces = body.salesQuantityPieces === undefined ? 0 : Number(body.salesQuantityPieces);
-  if (!Number.isInteger(salesQuantityPieces) || salesQuantityPieces < 0) {
-    return { error: "salesQuantityPieces must be a non-negative whole number of pieces." };
-  }
-  if (salesQuantityPieces > 0) {
-    return { error: "Sales dispatches must be recorded through the Sales feature." };
-  }
-  const produced = Number(body.closingStockPieces)
-    + Number(body.damagedQuantityPieces) - Number(body.openingStockPieces);
-  if (produced < 0) return { error: "Calculated production cannot be negative." };
-  return { value: { ...body, salesQuantityPieces: 0, producedQuantityPieces: produced } };
+  return {
+    value: {
+      ...body,
+      openingStockPacks: Number(body.openingStockPacks),
+      damagedQuantityPacks: Number(body.damagedQuantityPacks),
+      closingStockPacks: Number(body.closingStockPacks),
+    },
+  };
 }
 
 async function createProductionRun(request, response) {
@@ -1134,10 +1700,9 @@ async function createProductionRun(request, response) {
         if (existing) {
           const sameRequest = String(existing.productId) === value.productId
             && existing.productionDate === value.productionDate
-            && existing.openingStockPieces === Number(value.openingStockPieces)
-            && existing.salesQuantityPieces === Number(value.salesQuantityPieces)
-            && existing.damagedQuantityPieces === Number(value.damagedQuantityPieces)
-            && existing.closingStockPieces === Number(value.closingStockPieces)
+            && existing.openingStockPacks === value.openingStockPacks
+            && existing.damagedQuantityPacks === value.damagedQuantityPacks
+            && existing.closingStockPacks === value.closingStockPacks
             && existing.damageReason === (value.damageReason?.trim() ?? "");
           if (!sameRequest) throw conflictError("Idempotency key was already used for a different production request.");
           return { run: serialize(existing), replayed: true };
@@ -1158,11 +1723,22 @@ async function createProductionRun(request, response) {
         conflict.statusCode = 409;
         throw conflict;
       }
-      const currentOpening = await getFinishedBalance(product._id, session);
-      if (currentOpening !== Number(value.openingStockPieces)) {
-        const conflict = new Error(`Opening stock changed. Current server balance is ${currentOpening} pieces; refresh and reconcile the physical count.`);
+      const summary = await dailyStockSummary(product._id, value.productionDate, session);
+      if (summary.openingStockPacks !== value.openingStockPacks) {
+        const unit = product.packType === "Box" ? "boxes" : "cartons";
+        const conflict = new Error(`Opening stock changed. Current server opening is ${summary.openingStockPacks} ${unit}; refresh and reconcile the physical count.`);
         conflict.statusCode = 409;
         throw conflict;
+      }
+      const producedQuantityPacks = calculateProducedPacks({
+        closingStockPacks: value.closingStockPacks,
+        salesQuantityPacks: summary.salesQuantityPacks,
+        damagedQuantityPacks: value.damagedQuantityPacks,
+        openingStockPacks: summary.openingStockPacks,
+        otherMovementNetPacks: summary.otherMovementNetPacks,
+      });
+      if (!Number.isInteger(producedQuantityPacks) || producedQuantityPacks < 0) {
+        throw conflictError("Calculated production cannot be negative. Check opening, closing, sales, damage, and other stock movements.");
       }
       const materializedRecipe = product.activeRecipeId
         ? await ProductionRecipe.findById(product.activeRecipeId).session(session).lean()
@@ -1181,6 +1757,7 @@ async function createProductionRun(request, response) {
       }
       const lines = [];
       const reference = `PROD-${randomUUID()}`;
+      const piecesPerPack = product.piecesPerPack;
       const [run] = await ProductionRun.create([{
         reference,
         productId: product._id,
@@ -1189,24 +1766,34 @@ async function createProductionRun(request, response) {
         recipeId: materializedRecipe?._id ?? null,
         recipeVersion: materializedRecipe?.version ?? null,
         productionDate: value.productionDate,
-        openingStockPieces: Number(value.openingStockPieces),
-        salesQuantityPieces: Number(value.salesQuantityPieces),
-        damagedQuantityPieces: Number(value.damagedQuantityPieces),
-        closingStockPieces: Number(value.closingStockPieces),
-        producedQuantityPieces: value.producedQuantityPieces,
+        inventoryUnit: "pack",
+        packTypeSnapshot: product.packType,
+        piecesPerPackSnapshot: piecesPerPack,
+        openingStockPacks: summary.openingStockPacks,
+        salesQuantityPacks: summary.salesQuantityPacks,
+        damagedQuantityPacks: value.damagedQuantityPacks,
+        closingStockPacks: value.closingStockPacks,
+        producedQuantityPacks,
+        openingStockPieces: summary.openingStockPacks * piecesPerPack,
+        salesQuantityPieces: summary.salesQuantityPacks * piecesPerPack,
+        damagedQuantityPieces: value.damagedQuantityPacks * piecesPerPack,
+        closingStockPieces: value.closingStockPacks * piecesPerPack,
+        producedQuantityPieces: producedQuantityPacks * piecesPerPack,
         damageReason: value.damageReason?.trim() ?? "",
         lines,
         idempotencyKey: value.idempotencyKey,
         actor: actorId(request),
       }], { session });
       const finishedMovementInputs = [
-        ...(value.producedQuantityPieces > 0 ? [{ type: "Production", direction: "in", quantityPieces: value.producedQuantityPieces, reason: "Calculated daily production" }] : []),
-        ...(Number(value.damagedQuantityPieces) > 0 ? [{ type: "Damage/write-off", direction: "out", quantityPieces: Number(value.damagedQuantityPieces), reason: value.damageReason.trim() }] : []),
+        ...(producedQuantityPacks > 0 ? [{ type: "Production", direction: "in", quantityPacks: producedQuantityPacks, reason: "Calculated daily production" }] : []),
+        ...(value.damagedQuantityPacks > 0 ? [{ type: "Damage/write-off", direction: "out", quantityPacks: value.damagedQuantityPacks, reason: value.damageReason.trim() }] : []),
       ];
       for (const movementInput of finishedMovementInputs) {
         await recordFinishedStockMovement({
           ...movementInput,
           productId: product._id,
+          packTypeSnapshot: product.packType,
+          piecesPerPackSnapshot: piecesPerPack,
           date: value.productionDate,
           reference,
           sourceType: "production",
@@ -1219,10 +1806,10 @@ async function createProductionRun(request, response) {
         request,
         eventType: "production.run_recorded",
         outcome: "success",
-        details: { productionRunId: String(run._id), reference, productId: String(product._id), producedQuantityPieces: value.producedQuantityPieces, ingredientCount: 0, rawMaterialUsagePostedSeparately: Boolean(materializedRecipe) },
+        details: { productionRunId: String(run._id), reference, productId: String(product._id), producedQuantityPacks, salesQuantityPacks: summary.salesQuantityPacks, packType: product.packType, ingredientCount: 0, rawMaterialUsagePostedSeparately: Boolean(materializedRecipe) },
         transaction: session,
       });
-      return { run: serialize(run), balancePieces: await getFinishedBalance(product._id, session) };
+      return { run: serialize(run), balancePacks: await getFinishedBalance(product._id, session) };
     });
     return response.status(result.replayed ? 200 : 201).json(result);
   } catch (error) {
@@ -1250,9 +1837,10 @@ async function listStockBalances(_request, response) {
       unit: product.unit,
       packType: product.packType,
       piecesPerPack: product.piecesPerPack,
-      balancePieces: finishedMap.get(String(product._id))?.quantityPieces ?? 0,
-      reservedPieces: finishedMap.get(String(product._id))?.reservedPieces ?? 0,
-      availablePieces: Math.max(0, (finishedMap.get(String(product._id))?.quantityPieces ?? 0) - (finishedMap.get(String(product._id))?.reservedPieces ?? 0)),
+      balancePacks: finishedMap.get(String(product._id))?.quantityPacks ?? 0,
+      reservedPacks: finishedMap.get(String(product._id))?.reservedPacks ?? 0,
+      availablePacks: Math.max(0, (finishedMap.get(String(product._id))?.quantityPacks ?? 0) - (finishedMap.get(String(product._id))?.reservedPacks ?? 0)),
+      loosePieces: finishedMap.get(String(product._id))?.loosePieces ?? 0,
     })),
     rawMaterials: materials.map((material) => ({
       materialId: String(material._id),
@@ -1279,16 +1867,28 @@ module.exports = {
   listMaterials,
   listProductionRuns,
   listProducts,
+  getDailyProductionStockSummary,
   listRawMovements,
   listStockBalances,
   postProductionMaterialUsage,
+  updateProductionMaterialUsage,
   receiveFinishedStock,
   receiveRawMaterial,
   transferRawMaterial,
+  updateMaterial,
+  deleteMaterial,
   updateProduct,
+  validateMaterialInput,
+  validatePackagingLevels,
+  packagingConversions,
+  validateReceiptInput,
+  sameRawMaterialReceiptRequest,
   validateIngredients,
   validateProduct,
+  calculateProducedPacks,
   calculateProductionMaterialLines,
+  calculateProductionUsageStockDeltas,
   validateProductionUsageInput,
+  validateProductionUsageUpdateInput,
   validateProductionInput,
 };

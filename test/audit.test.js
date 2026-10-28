@@ -274,6 +274,34 @@ test("authenticated activity is audited with route templates, resource IDs, and 
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(recorded[3].eventType, "data.write.succeeded");
     assert.equal(recorded[3].resource.type, "orders");
+
+    const failedWrite = new EventEmitter();
+    failedWrite.statusCode = 400;
+    captureAuthenticatedActivity({
+      ...request,
+      method: "PUT",
+      baseUrl: "/api/employees",
+      route: { path: "/:id" },
+      params: { id: "EMP-001" },
+    }, failedWrite, () => {});
+    failedWrite.emit("finish");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(recorded[4].eventType, "data.write.failed");
+    assert.equal(recorded[4].outcome, "failure");
+    assert.ok(AuditEvent.AUDIT_EVENT_TYPES.includes(recorded[4].eventType));
+
+    const failedRead = new EventEmitter();
+    failedRead.statusCode = 500;
+    captureAuthenticatedActivity({
+      ...request,
+      route: { path: "/:id" },
+      params: { id: "EMP-001" },
+    }, failedRead, () => {});
+    failedRead.emit("finish");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(recorded[5].eventType, "data.read.failed");
+    assert.equal(recorded[5].outcome, "failure");
+    assert.ok(AuditEvent.AUDIT_EVENT_TYPES.includes(recorded[5].eventType));
   } finally {
     audit.recordAudit = originalAudit;
   }

@@ -6,6 +6,8 @@
   "scripts": {
     "test": "node --test",
     "migrate:raw-materials": "node scripts/migrateRawMaterialInventory.js",
+    "migrate:finished-stock-packs": "node scripts/migrateFinishedStockToPacks.js",
+    "migrate:production-material-usage-index": "node scripts/migrateProductionMaterialUsageRunIndex.js",
     "backfill:credit-payment-receipts": "node scripts/backfillCreditPaymentReceipts.js",
     "start": "node server.js",
     "dev": "nodemon server.js"

@@ -14,7 +14,7 @@ const usageLineSchema = new mongoose.Schema(
 const productionMaterialUsageSchema = new mongoose.Schema(
   {
     reference: { type: String, required: true, unique: true, trim: true, maxlength: 80 },
-    productionRunId: { type: mongoose.Schema.Types.ObjectId, ref: "ProductionRun", required: true },
+    productionRunId: { type: mongoose.Schema.Types.ObjectId, ref: "ProductionRun" },
     productId: { type: mongoose.Schema.Types.ObjectId, ref: "FinishedProduct", required: true },
     productName: { type: String, required: true, trim: true, maxlength: 160 },
     productionDate: { type: String, required: true, match: /^\d{4}-\d{2}-\d{2}$/ },
@@ -26,11 +26,12 @@ const productionMaterialUsageSchema = new mongoose.Schema(
     lines: { type: [usageLineSchema], required: true, validate: [(lines) => lines.length > 0, "Production usage requires recipe lines."] },
     idempotencyKey: { type: String, trim: true, maxlength: 120 },
     actor: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   },
   { timestamps: true },
 );
 
-productionMaterialUsageSchema.index({ productionRunId: 1 }, { unique: true });
+productionMaterialUsageSchema.index({ productionRunId: 1 }, { unique: true, sparse: true });
 productionMaterialUsageSchema.index({ productionDate: -1, createdAt: -1 });
 productionMaterialUsageSchema.index({ idempotencyKey: 1 }, { unique: true, sparse: true });
 

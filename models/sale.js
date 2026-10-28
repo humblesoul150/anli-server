@@ -49,6 +49,7 @@ const saleSchema = new mongoose.Schema(
     legacyId: { type: String, trim: true, maxlength: 100, sparse: true, unique: true },
     customerId: { type: String, trim: true, maxlength: 80, default: null },
     assignedTo: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    createdByName: { type: String, trim: true, maxlength: 120, default: "" },
     customer: { type: partySnapshotSchema, required: true },
     company: { type: companySnapshotSchema, required: true },
     date: { type: String, required: true, match: /^\d{4}-\d{2}-\d{2}$/ },
