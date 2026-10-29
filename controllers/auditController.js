@@ -68,6 +68,7 @@ async function listEvents(request, response, forcedTargetUserId) {
   const {
     eventType,
     category,
+    categories: categoriesValue,
     outcome,
     actorId,
     targetUserId: queryTargetUserId,
@@ -76,10 +77,13 @@ async function listEvents(request, response, forcedTargetUserId) {
     to,
     cursor: cursorValue,
   } = request.query;
-  const targetUserId = forcedTargetUserId || queryTargetUserId;
+  const targetUserId = typeof forcedTargetUserId === "string"
+    ? forcedTargetUserId
+    : queryTargetUserId;
   for (const [name, value] of Object.entries({
     eventType,
     category,
+    categories: categoriesValue,
     outcome,
     actorId,
     targetUserId,
@@ -104,6 +108,16 @@ async function listEvents(request, response, forcedTargetUserId) {
   }
   if (category && !AUDIT_EVENT_CATEGORIES.includes(category)) {
     return response.status(400).json({ error: "Unknown audit event category." });
+  }
+  const categories = categoriesValue === undefined ? [] : categoriesValue.split(",");
+  if (
+    categoriesValue !== undefined &&
+    (
+      categories.length === 0 ||
+      categories.some((value) => !value || !AUDIT_EVENT_CATEGORIES.includes(value))
+    )
+  ) {
+    return response.status(400).json({ error: "categories must be a comma-separated list of known audit categories." });
   }
   if (resourceType && !AUDIT_RESOURCE_TYPES.includes(resourceType)) {
     return response.status(400).json({ error: "Unknown audit resource type." });
@@ -137,6 +151,11 @@ async function listEvents(request, response, forcedTargetUserId) {
   const conditions = [];
   if (eventType) conditions.push({ eventType });
   if (category) conditions.push({ eventType: new RegExp(`^${category}\\.`) });
+  if (categories.length) {
+    conditions.push({
+      $or: categories.map((value) => ({ eventType: new RegExp(`^${value}\\.`) })),
+    });
+  }
   if (outcome) conditions.push({ outcome });
   if (actorId) conditions.push({ actorId });
   if (targetUserId) conditions.push({ targetUserId });

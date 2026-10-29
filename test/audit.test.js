@@ -198,6 +198,67 @@ test("audit list validates filters and uses descending cursor pagination", async
   }
 });
 
+test("audit list filters grouped categories with the same server cursor", async () => {
+  const originalFind = AuditEvent.find;
+  let query;
+  AuditEvent.find = (filter) => {
+    query = filter;
+    return {
+      sort() { return this; },
+      limit() { return this; },
+      lean: async () => [],
+    };
+  };
+
+  try {
+    const cursor = Buffer.from(JSON.stringify({
+      createdAt: "2026-10-18T08:00:00.000Z",
+      id: "507f1f77bcf86cd799439021",
+    })).toString("base64url");
+    const response = createResponse();
+    await listEvents({ query: { categories: "sale,credit,receipt", cursor } }, response);
+
+    assert.equal(response.statusCode, 200);
+    const categoryCondition = query.$and.find((condition) => condition.$or);
+    assert.equal(categoryCondition.$or.length, 3);
+    assert.ok(categoryCondition.$or[0].eventType.test("sale.created"));
+    assert.ok(categoryCondition.$or[1].eventType.test("credit.sale_updated"));
+    assert.ok(categoryCondition.$or[2].eventType.test("receipt.archived"));
+    assert.ok(!categoryCondition.$or[0].eventType.test("data.read.succeeded"));
+    assert.ok(query.$and.some((condition) => condition.$or?.some((part) => part._id)));
+
+    const invalid = createResponse();
+    await listEvents({ query: { categories: "sale,unknown" } }, invalid);
+    assert.equal(invalid.statusCode, 400);
+  } finally {
+    AuditEvent.find = originalFind;
+  }
+});
+
+test("audit list ignores Express next callback when called as a route handler", async () => {
+  const originalFind = AuditEvent.find;
+  let query;
+  AuditEvent.find = (filter) => {
+    query = filter;
+    return {
+      sort() { return this; },
+      limit() { return this; },
+      lean: async () => [],
+    };
+  };
+
+  try {
+    const response = createResponse();
+    await listEvents({ query: {} }, response, () => {});
+
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(query, {});
+    assert.deepEqual(response.body, { events: [], nextCursor: null });
+  } finally {
+    AuditEvent.find = originalFind;
+  }
+});
+
 test("audit event catalog exposes the complete event and resource filters", async () => {
   const response = createResponse();
   await listEventTypes({}, response);

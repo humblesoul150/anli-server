@@ -3,7 +3,7 @@ const { test } = require("node:test");
 const Order = require("../models/order");
 const OrderPayment = require("../models/orderPayment");
 const OrderSequence = require("../models/orderSequence");
-const { validateOrderFields } = require("../controllers/ordersController");
+const { serialize, validateOrderFields } = require("../controllers/ordersController");
 
 const productId = "507f1f77bcf86cd799439013";
 const workDate = new Intl.DateTimeFormat("en-CA", {
@@ -42,6 +42,19 @@ test("order validation accepts catalog lines and rejects malformed values", () =
   assert.match(validateOrderFields(validOrder({ paymentTerms: "Credit", dueDate: undefined })).error, /due date/);
   assert.match(validateOrderFields(validOrder({ unexpected: true })).error, /supported request shape/);
   assert.match(validateOrderFields(validOrder({ requestedDate: "2026-02-30" })).error, /valid YYYY-MM-DD/);
+});
+
+test("order serialization always exposes the stable ID for API clients", () => {
+  const documentId = "507f1f77bcf86cd799439014";
+  const serialized = serialize({
+    _id: documentId,
+    toJSON: () => ({ _id: documentId, orderNumber: "ORD-2026-000001", __v: 0 }),
+  });
+
+  assert.equal(serialized.id, documentId);
+  assert.equal(serialized.orderNumber, "ORD-2026-000001");
+  assert.equal("_id" in serialized, false);
+  assert.equal("__v" in serialized, false);
 });
 
 test("order API mutation inputs can be partial only when editing an order", () => {

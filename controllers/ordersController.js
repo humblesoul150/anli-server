@@ -37,8 +37,10 @@ const today = () => new Intl.DateTimeFormat("en-CA", {
 const invalid = (message, statusCode = 400) => Object.assign(new Error(message), { statusCode });
 const serialize = (document) => {
   if (!document) return document;
-  if (document.toJSON) return document.toJSON();
-  const result = { ...document, id: String(document._id) };
+  const result = document.toJSON ? document.toJSON() : { ...document };
+  const id = result.id ?? result._id ?? document._id;
+  if (id !== undefined && id !== null) result.id = String(id);
+  delete result._id;
   delete result._id;
   delete result.__v;
   return result;
@@ -703,6 +705,7 @@ module.exports = {
   listOrders,
   recordOrderPayment,
   restoreOrder,
+  serialize,
   updateOrder,
   validateOrderFields,
 };
