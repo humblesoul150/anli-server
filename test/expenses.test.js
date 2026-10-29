@@ -123,11 +123,11 @@ test("Super Admin can perform department actions while other expense roles stay 
   audit.recordAudit = async (entry) => denied.push(entry);
   const request = (role) => ({ authUser: { _id: userId, name: role, roles: [role] }, baseUrl: "/api/expenses" });
   try {
-    for (const [role, expected] of [
-      ["Accountant", "accountant"],
-      ["General Manager", "manager"],
-      ["Super Admin", "Super Admin"],
-      ["Admin", null],
+    for (const [role, canRead, canManage, canApprove] of [
+      ["Accountant", true, true, false],
+      ["General Manager", true, true, true],
+      ["Super Admin", true, true, true],
+      ["Admin", true, false, false],
     ]) {
       for (const [kind, middleware] of [
         ["reader", expenseRouter.requireExpenseReader],
@@ -139,7 +139,7 @@ test("Super Admin can perform department actions while other expense roles stay 
         await middleware(request(role), res, () => { reached = true; });
         assert.equal(
           reached,
-          role === "Super Admin" ? true : kind === "reader" ? Boolean(expected) : expected === kind,
+          kind === "reader" ? canRead : kind === "accountant" ? canManage : canApprove,
           `${role} ${kind}`,
         );
         if (!reached) assert.equal(res.statusCode, 403);

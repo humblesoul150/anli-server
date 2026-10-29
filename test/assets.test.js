@@ -185,7 +185,7 @@ test("asset endpoint role matrix explicitly restricts every read and write", asy
     ["Inventory Manager", true, true],
     ["General Manager", true, false],
     ["Super Admin", true, true],
-    ["Admin", false, false],
+    ["Admin", true, false],
     ["Production Manager", false, false],
   ];
   try {

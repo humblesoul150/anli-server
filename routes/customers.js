@@ -7,7 +7,7 @@ const { hasAnyDepartmentRole } = require("../lib/authorization");
 const router = express.Router();
 const authenticated = [authenticate, requirePasswordChanged];
 const readerRoles = ["Sales Manager", "Marketing Manager", "General Manager", "Admin"];
-const managerRoles = ["Sales Manager", "General Manager", "Admin"];
+const managerRoles = ["Sales Manager", "General Manager"];
 
 function requireCustomerRole(roles, reason, message) {
   return async (request, response, next) => {

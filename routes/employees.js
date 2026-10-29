@@ -25,7 +25,7 @@ const { hasAnyDepartmentRole } = require("../lib/authorization");
 
 const router = express.Router();
 const employeeRoles = ["Super Admin", "Admin", "Human Resource", "General Manager"];
-const managerRoles = ["Super Admin", "Admin", "Human Resource"];
+const managerRoles = ["Super Admin", "Human Resource"];
 const authenticated = [authenticate, requirePasswordChanged];
 const reader = [...authenticated, requireRoles(employeeRoles)];
 const manager = [...authenticated, requireRoles(managerRoles)];

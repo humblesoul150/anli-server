@@ -10,12 +10,19 @@ const {
 const {
   authenticate,
   requirePasswordChanged,
-  requireSuperAdmin,
 } = require("../middleware/authentication");
+const { requireAnyRole } = require("../middleware/roleAccess");
 
 const router = express.Router();
-const superAdminOnly = [authenticate, requireSuperAdmin, requirePasswordChanged];
-const authenticatedUser = [authenticate, requirePasswordChanged];
+const companyProfileManager = [
+  authenticate,
+  requirePasswordChanged,
+  requireAnyRole(
+    ["Super Admin", "General Manager"],
+    "company_profile_manager_required",
+    "Only Super Admin and General Manager can manage the company profile.",
+  ),
+];
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 2 * 1024 * 1024, files: 1 },
@@ -32,9 +39,9 @@ function parseLogoUpload(request, response, next) {
 }
 
 router.get("/public-brand", getPublicBrand);
-router.get("/", authenticatedUser, getProfile);
-router.put("/", superAdminOnly, updateProfile);
-router.post("/logo", superAdminOnly, parseLogoUpload, uploadCompanyLogo);
-router.delete("/logo", superAdminOnly, removeCompanyLogo);
+router.get("/", companyProfileManager, getProfile);
+router.put("/", companyProfileManager, updateProfile);
+router.post("/logo", companyProfileManager, parseLogoUpload, uploadCompanyLogo);
+router.delete("/logo", companyProfileManager, removeCompanyLogo);
 
 module.exports = router;

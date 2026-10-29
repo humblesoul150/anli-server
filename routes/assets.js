@@ -6,7 +6,7 @@ const audit = require("../lib/audit");
 const { hasAnyDepartmentRole } = require("../lib/authorization");
 
 const router = express.Router();
-const readerRoles = ["Inventory Manager", "General Manager", "Super Admin"];
+const readerRoles = ["Inventory Manager", "General Manager", "Admin", "Super Admin"];
 const writerRoles = ["Inventory Manager"];
 const photoUpload = multer({
   storage: multer.memoryStorage(),

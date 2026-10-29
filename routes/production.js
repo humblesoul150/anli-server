@@ -5,8 +5,9 @@ const audit = require("../lib/audit");
 const { hasAnyDepartmentRole } = require("../lib/authorization");
 
 const router = express.Router();
-const readRoles = ["Super Admin", "Admin", "General Manager", "Production Manager", "Inventory Manager"];
-const writeRoles = ["Super Admin", "Admin", "General Manager", "Production Manager", "Inventory Manager"];
+const readRoles = ["Admin", "General Manager", "Production Manager", "Inventory Manager"];
+const productionWriteRoles = ["Production Manager", "Inventory Manager"];
+const inventoryWriteRoles = ["Inventory Manager"];
 
 function requireRoles(allowedRoles) {
   return async (request, response, next) => {
@@ -25,38 +26,40 @@ function requireRoles(allowedRoles) {
 
 const authenticated = [authenticate, requirePasswordChanged];
 const reader = [...authenticated, requireRoles(readRoles)];
-const writer = [...authenticated, requireRoles(writeRoles)];
+const productionWriter = [...authenticated, requireRoles(productionWriteRoles)];
+const inventoryWriter = [...authenticated, requireRoles(inventoryWriteRoles)];
 
 router.get("/products", reader, controller.listProducts);
-router.post("/products", writer, controller.createProduct);
-router.patch("/products/:id", writer, controller.updateProduct);
-router.put("/products/:id/recipe", writer, controller.changeRecipe);
+router.post("/products", productionWriter, controller.createProduct);
+router.patch("/products/:id", productionWriter, controller.updateProduct);
+router.put("/products/:id/recipe", productionWriter, controller.changeRecipe);
 
 router.get("/materials", reader, controller.listMaterials);
-router.post("/materials", writer, controller.createMaterial);
-router.patch("/materials/:materialId", writer, controller.updateMaterial);
-router.delete("/materials/:materialId", writer, controller.deleteMaterial);
+router.post("/materials", inventoryWriter, controller.createMaterial);
+router.patch("/materials/:materialId", inventoryWriter, controller.updateMaterial);
+router.delete("/materials/:materialId", inventoryWriter, controller.deleteMaterial);
 router.get("/materials/responsible-users", reader, controller.listInventoryResponsibleUsers);
 router.get("/materials/low-stock", reader, controller.listLowStockAlerts);
 router.get("/materials/receipts", reader, controller.listMaterialReceipts);
 router.get("/materials/production-usages", reader, controller.listProductionMaterialUsages);
-router.post("/materials/production-usages", writer, controller.postProductionMaterialUsage);
-router.patch("/materials/production-usages/:id", writer, controller.updateProductionMaterialUsage);
-router.put("/materials/:materialId/locations/:location", writer, controller.configureMaterialLocation);
-router.post("/materials/:materialId/receipts", writer, controller.receiveRawMaterial);
+router.post("/materials/production-usages", inventoryWriter, controller.postProductionMaterialUsage);
+router.patch("/materials/production-usages/:id", inventoryWriter, controller.updateProductionMaterialUsage);
+router.put("/materials/:materialId/locations/:location", inventoryWriter, controller.configureMaterialLocation);
+router.post("/materials/:materialId/receipts", inventoryWriter, controller.receiveRawMaterial);
 router.get("/materials/movements", reader, controller.listRawMovements);
-router.post("/materials/transfers", writer, controller.transferRawMaterial);
-router.post("/materials/adjustments", writer, controller.adjustRawMaterial);
+router.post("/materials/transfers", inventoryWriter, controller.transferRawMaterial);
+router.post("/materials/adjustments", inventoryWriter, controller.adjustRawMaterial);
 
 router.get("/stock/balances", reader, controller.listStockBalances);
 router.get("/stock/finished/movements", reader, controller.listFinishedMovements);
-router.post("/stock/finished/receipts", writer, controller.receiveFinishedStock);
-router.post("/stock/finished/adjustments", writer, controller.adjustFinishedStock);
+router.post("/stock/finished/receipts", inventoryWriter, controller.receiveFinishedStock);
+router.post("/stock/finished/adjustments", inventoryWriter, controller.adjustFinishedStock);
 
 router.get("/runs", reader, controller.listProductionRuns);
 router.get("/runs/daily-stock-summary", reader, controller.getDailyProductionStockSummary);
-router.post("/runs", writer, controller.createProductionRun);
+router.post("/runs", productionWriter, controller.createProductionRun);
 
 router.requireProductionReader = requireRoles(readRoles);
-router.requireProductionWriter = requireRoles(writeRoles);
+router.requireProductionWriter = requireRoles(productionWriteRoles);
+router.requireInventoryWriter = requireRoles(inventoryWriteRoles);
 module.exports = router;

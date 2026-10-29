@@ -9,14 +9,18 @@ const {
 const {
   authenticate,
   requirePasswordChanged,
-  requireSuperAdmin,
 } = require("../middleware/authentication");
+const { requireAnyRole } = require("../middleware/roleAccess");
 
 const router = express.Router();
 const requireAccountAdmin = [
   authenticate,
-  requireSuperAdmin,
   requirePasswordChanged,
+  requireAnyRole(
+    ["Super Admin", "General Manager", "Human Resource"],
+    "account_manager_required",
+    "Only Super Admin, General Manager, and Human Resource can manage accounts.",
+  ),
 ];
 
 router.get("/", requireAccountAdmin, listUsers);

@@ -131,7 +131,7 @@ test("customer role middleware allows the selected roles and audits denied acces
       ["Sales Manager", true, true],
       ["Marketing Manager", true, false],
       ["General Manager", true, true],
-      ["Admin", true, true],
+      ["Admin", true, false],
       ["Super Admin", true, true],
       ["Accountant", false, false],
     ]) {

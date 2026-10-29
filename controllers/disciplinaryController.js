@@ -56,7 +56,7 @@ function isHr(user) {
 }
 
 function hasDisciplinaryRole(user) {
-  return hasAnyDepartmentRole(user, ["Human Resource", "General Manager"]);
+  return hasAnyDepartmentRole(user, ["Human Resource", "General Manager", "Admin"]);
 }
 
 function isValidDate(value) {
@@ -373,7 +373,7 @@ async function listCases(request, response) {
     if (!LETTER_TYPES.includes(request.query.type)) return response.status(400).json({ error: "type is invalid." });
     filter.type = request.query.type;
   }
-  if (!isHr(request.authUser)) {
+  if (!isHr(request.authUser) && !request.authUser.roles.includes("Admin")) {
     filter.$or = [
       { "assignedApprovers.humanResource": request.authUser._id },
       { "assignedApprovers.generalManager": request.authUser._id },
@@ -388,7 +388,7 @@ async function getCase(request, response) {
   if (!mongoose.isValidObjectId(request.params.caseId)) return response.status(400).json({ error: "Case ID is invalid." });
   if (!hasDisciplinaryRole(request.authUser)) return deny(request, response, "disciplinary_read_role_required", "disciplinary.cases");
   const filter = { _id: request.params.caseId };
-  if (!isHr(request.authUser)) {
+  if (!isHr(request.authUser) && !request.authUser.roles.includes("Admin")) {
     filter.$or = [
       { "assignedApprovers.humanResource": request.authUser._id },
       { "assignedApprovers.generalManager": request.authUser._id },
@@ -846,7 +846,7 @@ async function listEmployeeIndicators(request, response) {
     status: "Issued",
     rescindedAt: null,
   };
-  if (!isHr(request.authUser)) {
+  if (!isHr(request.authUser) && !request.authUser.roles.includes("Admin")) {
     filter.$or = [
       { "assignedApprovers.humanResource": request.authUser._id },
       { "assignedApprovers.generalManager": request.authUser._id },
@@ -976,7 +976,7 @@ async function downloadEvidence(request, response) {
   }
   if (!hasDisciplinaryRole(request.authUser)) return deny(request, response, "disciplinary_read_role_required", "disciplinary.cases.evidence");
   const filter = { _id: request.params.caseId };
-  if (!isHr(request.authUser)) {
+  if (!isHr(request.authUser) && !request.authUser.roles.includes("Admin")) {
     filter.$or = [
       { "assignedApprovers.humanResource": request.authUser._id },
       { "assignedApprovers.generalManager": request.authUser._id },

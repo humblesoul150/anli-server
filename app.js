@@ -25,6 +25,7 @@ const orderRoutes = require("./routes/orders");
 const notificationRoutes = require("./routes/notifications");
 const approvalRoutes = require("./routes/approvals");
 const dashboardRoutes = require("./routes/dashboard");
+const { adminReadOnly } = require("./middleware/adminReadOnly");
 
 function createApp(config) {
   const app = express();
@@ -49,6 +50,7 @@ function createApp(config) {
   app.use(compression());
   app.use(express.json({ limit: "1mb" }));
   app.use(express.urlencoded({ extended: true, limit: "1mb" }));
+  app.use("/api", adminReadOnly);
 
   app.get("/health", (_request, response) => {
     response

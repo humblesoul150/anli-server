@@ -8,8 +8,8 @@ const DisciplinaryCase = require("../models/disciplinaryCase");
 const INBOX_LIMIT = 500;
 const READ_ROLES = {
   salaryAdvances: ["Human Resource", "General Manager", "Admin"],
-  payroll: ["Human Resource", "General Manager", "Accountant"],
-  expenses: ["Accountant", "General Manager"],
+  payroll: ["Human Resource", "General Manager", "Admin"],
+  expenses: ["Accountant", "General Manager", "Admin"],
 };
 
 function hasRole(user, roles) {
@@ -302,7 +302,7 @@ async function listApprovalInbox(request, response) {
       .sort({ createdAt: -1, _id: -1 }).limit(INBOX_LIMIT + 1).lean());
   }
 
-  const canReadDisciplinary = hasRole(user, ["Human Resource", "General Manager"])
+  const canReadDisciplinary = hasRole(user, ["Human Resource", "General Manager", "Admin"])
     || user.roles?.includes("Super Admin");
   if (canReadDisciplinary) {
     const disciplinaryFilter = user.roles?.includes("Human Resource")

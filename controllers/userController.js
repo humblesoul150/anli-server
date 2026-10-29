@@ -5,6 +5,8 @@ const RoleClaim = require("../models/roleClaim");
 const { toPublicUser } = require("../lib/userDto");
 const audit = require("../lib/audit");
 const {
+  canAssignRoles,
+  canManageAccount,
   EXCLUSIVE_ROLES,
   validateCredentials,
   validateRoles,
@@ -75,9 +77,13 @@ function handleDuplicate(error, response) {
   return true;
 }
 
-async function listUsers(_request, response) {
+async function listUsers(request, response) {
   const users = await User.find().sort({ name: 1, email: 1 });
-  return response.json({ users: users.map(toPublicUser) });
+  return response.json({
+    users: users
+      .filter((user) => canManageAccount(request.authUser, user))
+      .map(toPublicUser),
+  });
 }
 
 async function createUser(request, response) {
@@ -85,6 +91,9 @@ async function createUser(request, response) {
   if (credentials.error) return response.status(400).json({ error: credentials.error });
   const roles = validateRoles(request.body?.roles);
   if (roles.error) return response.status(400).json({ error: roles.error });
+  if (!canAssignRoles(request.authUser, roles.value)) {
+    return response.status(403).json({ error: "You cannot create an account with one or more of these roles." });
+  }
 
   const session = await mongoose.startSession();
   let created;
@@ -137,6 +146,12 @@ async function updateUser(request, response) {
     await session.withTransaction(async () => {
       const user = await User.findById(request.params.id).session(session);
       if (!user) throw httpError(404, "User not found.");
+      if (!canManageAccount(request.authUser, user)) {
+        throw httpError(403, "You cannot manage this account.");
+      }
+      if (!canAssignRoles(request.authUser, roles.value)) {
+        throw httpError(403, "You cannot assign one or more of these roles.");
+      }
       await ensureSuperAdminRemains(user, roles.value, user.status, session);
       const changedFields = [];
       if (user.name !== credentials.value.name) changedFields.push("name");
@@ -197,6 +212,9 @@ async function updateUserStatus(request, response) {
     await session.withTransaction(async () => {
       const user = await User.findById(request.params.id).session(session);
       if (!user) throw httpError(404, "User not found.");
+      if (!canManageAccount(request.authUser, user)) {
+        throw httpError(403, "You cannot manage this account.");
+      }
       await ensureSuperAdminRemains(user, user.roles, status, session);
       const previousStatus = user.status;
       if (user.status !== status) user.sessionVersion += 1;
@@ -244,6 +262,9 @@ async function resetUserPassword(request, response) {
     await transaction.withTransaction(async () => {
       user = await User.findById(request.params.id).session(transaction);
       if (!user) throw httpError(404, "User not found.");
+      if (!canManageAccount(request.authUser, user)) {
+        throw httpError(403, "You cannot manage this account.");
+      }
       user.password = temporaryPassword;
       user.mustChangePassword = true;
       user.temporaryPasswordExpiresAt = expiresAt;

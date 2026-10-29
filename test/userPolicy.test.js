@@ -6,6 +6,9 @@ const {
   normalizeEmail,
   validateCredentials,
   validateRoles,
+  canAssignRoles,
+  canManageAccount,
+  creatableRolesForAccountManager,
 } = require("../lib/userPolicy");
 
 test("normalizes account email addresses", () => {
@@ -40,10 +43,43 @@ test("validates user credentials and enforces initial password length", () => {
 });
 
 test("accepts only non-empty, known, distinct roles", () => {
-  assert.deepEqual(validateRoles(["Admin", "Sales Manager"]).value, ["Admin", "Sales Manager"]);
+  assert.equal(validateRoles(["Admin", "Sales Manager"]).error, "Admin must be assigned as the account's only role.");
   assert.equal(validateRoles([]).error, "Assign at least one role.");
   assert.equal(validateRoles(["Admin", "Admin"]).error, "Duplicate roles are not allowed.");
   assert.equal(validateRoles(["Unknown"]).error, "One or more assigned roles are invalid.");
+});
+
+test("account managers receive only their permitted creation roles", () => {
+  assert.deepEqual(
+    creatableRolesForAccountManager({ roles: ["Super Admin"] }),
+    ["Admin", "General Manager"],
+  );
+  assert.deepEqual(
+    creatableRolesForAccountManager({ roles: ["General Manager"] }),
+    ["Human Resource"],
+  );
+  assert.ok(
+    creatableRolesForAccountManager({ roles: ["Human Resource"] })
+      .includes("Sales Manager"),
+  );
+  assert.deepEqual(creatableRolesForAccountManager({ roles: ["Accountant"] }), []);
+});
+
+test("account managers can manage only their permitted targets", () => {
+  const superAdmin = { _id: "actor-sa", roles: ["Super Admin"] };
+  const gm = { _id: "actor-gm", roles: ["General Manager"] };
+  const hr = { _id: "actor-hr", roles: ["Human Resource"] };
+
+  assert.equal(canManageAccount(superAdmin, { _id: "admin", roles: ["Admin"] }), true);
+  assert.equal(canManageAccount(superAdmin, { _id: "sales", roles: ["Sales Manager"] }), false);
+  assert.equal(canManageAccount(gm, { _id: "hr", roles: ["Human Resource"] }), true);
+  assert.equal(canManageAccount(gm, { _id: "admin", roles: ["Admin"] }), false);
+  assert.equal(canManageAccount(hr, { _id: "sales", roles: ["Sales Manager"] }), true);
+  assert.equal(canManageAccount(hr, { _id: "gm", roles: ["General Manager"] }), false);
+  assert.equal(canManageAccount(hr, hr), false);
+  assert.equal(canManageAccount(hr, { _id: "multi", roles: ["Human Resource", "Sales Manager"] }), true);
+  assert.equal(canAssignRoles(gm, ["Human Resource"]), true);
+  assert.equal(canAssignRoles(gm, ["Sales Manager"]), false);
 });
 
 test("user model requires password and roles and does not select password by default", async () => {

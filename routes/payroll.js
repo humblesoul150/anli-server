@@ -23,7 +23,7 @@ function requireRole(roles, reason, message) {
 }
 
 const reader = requireRole(
-  ["Human Resource", "General Manager", "Super Admin", "Accountant"],
+  ["Human Resource", "General Manager", "Super Admin", "Admin"],
   "payroll_read_role_required",
   "You do not have permission to view payroll.",
 );
@@ -33,9 +33,9 @@ const preparer = requireRole(
   "Only Human Resource can prepare payroll runs.",
 );
 const policyWriter = requireRole(
-  ["Accountant", "Super Admin"],
+  ["Super Admin"],
   "payroll_policy_role_required",
-  "Only an Accountant or Super Admin can configure payroll policy.",
+  "Only a Super Admin can configure payroll policy.",
 );
 const approver = requireRole(
   ["General Manager", "Super Admin"],
@@ -43,9 +43,9 @@ const approver = requireRole(
   "Only the assigned General Manager or Super Admin can approve payroll.",
 );
 const cashier = requireRole(
-  ["Accountant"],
+  ["Super Admin"],
   "payroll_payment_role_required",
-  "Only an Accountant can record payroll cash payouts.",
+  "Only a Super Admin can record payroll cash payouts.",
 );
 const attendanceCloser = requireRole(
   ["Human Resource"],

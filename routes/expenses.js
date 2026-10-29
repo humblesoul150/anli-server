@@ -28,14 +28,14 @@ function requireExpenseRole(roles, reason, message) {
 }
 
 const reader = requireExpenseRole(
-  ["Accountant", "General Manager", "Super Admin"],
+  ["Accountant", "General Manager", "Admin", "Super Admin"],
   "expense_read_role_required",
   "You do not have permission to view expenses.",
 );
 const accountant = requireExpenseRole(
-  ["Accountant"],
+  ["Accountant", "General Manager"],
   "expense_accountant_role_required",
-  "Only an Accountant can create expenses or record expense payments.",
+  "Only an Accountant or General Manager can manage expense records.",
 );
 const manager = requireExpenseRole(
   ["General Manager"],

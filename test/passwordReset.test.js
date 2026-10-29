@@ -72,7 +72,10 @@ test("reset creates a random 24-hour temporary password and invalidates sessions
   try {
     const response = createResponse();
     await resetUserPassword(
-      { params: { id: user._id } },
+      {
+        authUser: { _id: "actor-super-admin", roles: ["Super Admin"] },
+        params: { id: user._id },
+      },
       response,
     );
 

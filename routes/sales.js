@@ -5,7 +5,7 @@ const audit = require("../lib/audit");
 const { hasAnyDepartmentRole } = require("../lib/authorization");
 
 const router = express.Router();
-const salesRoles = ["Sales Manager", "General Manager", "Super Admin"];
+const salesRoles = ["Sales Manager", "General Manager", "Admin", "Super Admin"];
 
 async function requireSalesRole(request, response, next) {
   if (hasAnyDepartmentRole(request.authUser, salesRoles)) return next();
