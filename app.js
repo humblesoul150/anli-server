@@ -20,6 +20,7 @@ const payrollRoutes = require("./routes/payroll");
 const expenseRoutes = require("./routes/expenses");
 const customerRoutes = require("./routes/customers");
 const salesRoutes = require("./routes/sales");
+const salesBonusSettingsRoutes = require("./routes/salesBonusSettings");
 const receiptRoutes = require("./routes/receipts");
 const orderRoutes = require("./routes/orders");
 const notificationRoutes = require("./routes/notifications");
@@ -88,6 +89,7 @@ function createApp(config) {
   app.use("/api/expenses", expenseRoutes);
   app.use("/api/customers", customerRoutes);
   app.use("/api/sales", salesRoutes);
+  app.use("/api/sales-bonus-settings", salesBonusSettingsRoutes);
   app.use("/api/receipts", receiptRoutes);
   app.use("/api/orders", orderRoutes);
   app.use("/api/notifications", notificationRoutes);

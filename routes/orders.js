@@ -6,6 +6,7 @@ const { hasAnyDepartmentRole } = require("../lib/authorization");
 
 const router = express.Router();
 const readerRoles = ["Sales Manager", "Marketing Manager", "General Manager", "Admin", "Super Admin"];
+const creatorRoles = ["Marketing Manager", "Sales Manager", "General Manager", "Super Admin"];
 const writerRoles = ["Sales Manager", "General Manager", "Super Admin"];
 
 function requireOrderRole(roles, reason, message) {
@@ -33,12 +34,17 @@ const writer = requireOrderRole(
   "order_write_role_required",
   "You do not have permission to change order records.",
 );
+const creator = requireOrderRole(
+  creatorRoles,
+  "order_create_role_required",
+  "You do not have permission to create order records.",
+);
 
 router.use(authenticate, requirePasswordChanged);
 
 router.get("/", reader, controller.listOrders);
 router.post("/legacy-import", writer, controller.importLegacyOrders);
-router.post("/", writer, controller.createOrder);
+router.post("/", creator, controller.createOrder);
 router.get("/:id", reader, controller.getOrder);
 router.put("/:id", writer, controller.updateOrder);
 router.post("/:id/confirm", writer, controller.confirmOrder);

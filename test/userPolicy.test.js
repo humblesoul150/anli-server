@@ -6,6 +6,7 @@ const {
   normalizeEmail,
   validateCredentials,
   validateRoles,
+  EXCLUSIVE_ROLES,
   canAssignRoles,
   canManageAccount,
   creatableRolesForAccountManager,
@@ -47,6 +48,12 @@ test("accepts only non-empty, known, distinct roles", () => {
   assert.equal(validateRoles([]).error, "Assign at least one role.");
   assert.equal(validateRoles(["Admin", "Admin"]).error, "Duplicate roles are not allowed.");
   assert.equal(validateRoles(["Unknown"]).error, "One or more assigned roles are invalid.");
+});
+
+test("only HR and Inventory Manager are single-user roles", () => {
+  assert.deepEqual(EXCLUSIVE_ROLES, ["Human Resource", "Inventory Manager"]);
+  assert.equal(validateRoles(["Human Resource", "Sales Manager"]).error, undefined);
+  assert.equal(validateRoles(["Sales Manager", "Marketing Manager"]).error, undefined);
 });
 
 test("account managers receive only their permitted creation roles", () => {

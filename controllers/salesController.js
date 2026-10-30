@@ -10,6 +10,8 @@ const User = require("../models/user");
 const ProfileSettings = require("../models/profileSettings");
 const audit = require("../lib/audit");
 const { recordFinishedStockMovement } = require("../lib/productionInventory");
+const SalesBonusSettings = require("../models/salesBonusSettings");
+const { calculateSalesBonus, allocateBonus, normalizeSettings } = require("../lib/salesBonus");
 
 const PAYMENT_TERMS = ["Paid now", "Same-day", "Credit"];
 const SALE_ROLES = ["Sales Manager", "General Manager", "Super Admin"];
@@ -47,6 +49,8 @@ function validateSaleInput(body) {
     "initialPaymentMethod",
     "initialPaymentTxnID",
     "idempotencyKey",
+    "bonusDisabled",
+    "bonusDisabledReason",
   ];
   if (!body || typeof body !== "object" || Array.isArray(body) ||
     Object.keys(body).some((key) => !allowed.includes(key))) {
@@ -121,17 +125,43 @@ function validateSaleInput(body) {
   if (typeof body.idempotencyKey !== "string" || !body.idempotencyKey.trim() || body.idempotencyKey.length > 120) {
     return { error: "A valid idempotencyKey is required." };
   }
+  const hasBonusDisable = body.bonusDisabled !== undefined || body.bonusDisabledReason !== undefined;
+  if (hasBonusDisable && typeof body.bonusDisabled !== "boolean") {
+    return { error: "bonusDisabled must be true or false." };
+  }
+  if (body.bonusDisabled && (typeof body.bonusDisabledReason !== "string" || !body.bonusDisabledReason.trim() || body.bonusDisabledReason.trim().length > 500)) {
+    return { error: "A reason of 500 characters or fewer is required to disable the sales bonus." };
+  }
+  if (!body.bonusDisabled && body.bonusDisabledReason !== undefined && body.bonusDisabledReason !== "") {
+    return { error: "A bonus disable reason can only be supplied when the bonus is disabled." };
+  }
+  const linesByProduct = new Map();
+  for (const line of lines) {
+    const existing = linesByProduct.get(line.productId);
+    if (!existing) {
+      linesByProduct.set(line.productId, { ...line });
+      continue;
+    }
+    if (existing.pricePerPack !== line.pricePerPack ||
+      existing.overrideReason !== line.overrideReason) {
+      return { error: "Duplicate product lines must use the same authorized price override." };
+    }
+    existing.packs += line.packs;
+  }
+  const mergedLines = [...linesByProduct.values()];
   return {
     value: {
       customerId: body.customerId || null,
       guest: body.guest,
-      lines,
+      lines: mergedLines,
       paymentTerms: body.paymentTerms,
       dueDate: body.dueDate,
       initialPaymentAmount,
       initialPaymentMethod: body.initialPaymentMethod,
       initialPaymentTxnID: body.initialPaymentTxnID?.trim() || "",
       idempotencyKey: body.idempotencyKey.trim(),
+      bonusDisabled: body.bonusDisabled === true,
+      bonusDisabledReason: body.bonusDisabled === true ? body.bonusDisabledReason.trim() : "",
     },
   };
 }
@@ -713,6 +743,9 @@ async function updateCreditSale(request, response) {
 async function createSale(request, response) {
   const { value, error } = validateSaleInput(request.body);
   if (error) return response.status(400).json({ error });
+  if (value.bonusDisabled && !SALE_ROLES.some((role) => request.authUser.roles?.includes(role))) {
+    return response.status(403).json({ error: "You do not have permission to disable sales bonuses." });
+  }
   try {
     const result = await mongoose.connection.transaction(async (session) => {
       const requestHash = createHash("sha256")
@@ -725,6 +758,8 @@ async function createSale(request, response) {
           initialPaymentAmount: value.initialPaymentAmount,
           initialPaymentMethod: value.initialPaymentMethod,
           initialPaymentTxnID: value.initialPaymentTxnID,
+          bonusDisabled: value.bonusDisabled,
+          bonusDisabledReason: value.bonusDisabledReason,
         }))
         .digest("hex");
       const existing = await Sale.findOne({ idempotencyKey: value.idempotencyKey }).session(session);
@@ -767,11 +802,34 @@ async function createSale(request, response) {
       }
       if (value.paymentTerms === "Credit" && !customer) throw invalid("Credit sales require a saved customer account.");
 
+      const bonusSettingsDocument = await SalesBonusSettings.findById("global").session(session).lean();
+      const bonusSettings = normalizeSettings(bonusSettingsDocument);
+      const eligibleLinesByProduct = value.lines
+        .map((line) => {
+          const product = productsById.get(line.productId);
+          return { productId: String(product._id), packs: line.packs, packType: product.packType };
+        })
+        .filter((line) => line.packType === "Box")
+        .reduce((totals, line) => {
+          totals.set(line.productId, {
+            productId: line.productId,
+            packs: (totals.get(line.productId)?.packs ?? 0) + line.packs,
+          });
+          return totals;
+        }, new Map());
+      const eligibleLines = [...eligibleLinesByProduct.values()];
+      const qualifyingBoxes = eligibleLines.reduce((sum, line) => sum + line.packs, 0);
+      const bonusCalculation = value.bonusDisabled || !bonusSettings.enabled
+        ? { bonusQuantity: 0, tier: null }
+        : calculateSalesBonus(qualifyingBoxes, bonusSettings);
+      const allocatedBonus = allocateBonus(eligibleLines, bonusCalculation.bonusQuantity);
+      const bonusByProduct = new Map(allocatedBonus.map((line) => [line.productId, line.bonusPacks]));
       const saleLines = value.lines.map((line) => {
         const product = productsById.get(line.productId);
         const pricePerPack = line.pricePerPack ?? product.price;
         const quantityPieces = line.packs * product.piecesPerPack;
         const lineTotal = line.packs * pricePerPack;
+        const bonusPacks = bonusByProduct.get(String(product._id)) ?? 0;
         if (!Number.isSafeInteger(quantityPieces) || !Number.isSafeInteger(lineTotal) || lineTotal < 1) {
           throw invalid("Sale quantities and totals exceed supported values.");
         }
@@ -782,6 +840,8 @@ async function createSale(request, response) {
           packType: product.packType,
           piecesPerPack: product.piecesPerPack,
           packs: line.packs,
+          bonusPacks,
+          totalStockPacks: line.packs + bonusPacks,
           quantityPieces,
           catalogPricePerPack: product.price,
           pricePerPack,
@@ -820,6 +880,15 @@ async function createSale(request, response) {
         createdByName: request.authUser.name || "",
         idempotencyKey: value.idempotencyKey,
         requestHash,
+        bonusSnapshot: {
+          enabled: bonusSettings.enabled && !value.bonusDisabled,
+          settingsVersion: bonusSettingsDocument?.version ?? 1,
+          qualifyingBoxes,
+          bonusBoxes: bonusCalculation.bonusQuantity,
+          tier: bonusCalculation.tier || "",
+          calculatedAt: new Date(),
+        },
+        bonusDisabledReason: value.bonusDisabledReason,
       }], { session });
       for (const [index, line] of saleLines.entries()) {
         const packLabel = line.packType === "Box"
@@ -841,6 +910,24 @@ async function createSale(request, response) {
           productName: line.productName,
           actor: actorId(request),
         }, session);
+        if (line.bonusPacks > 0) {
+          await recordFinishedStockMovement({
+            productId: line.productId,
+            type: "Sales bonus dispatch",
+            direction: "out",
+            quantityPacks: line.bonusPacks,
+            packTypeSnapshot: line.packType,
+            piecesPerPackSnapshot: line.piecesPerPack,
+            date,
+            reference: receiptNumber,
+            sourceType: "sale",
+            sourceId: sale._id,
+            idempotencyKey: `${value.idempotencyKey}:${index}:bonus`,
+            reason: `Sales bonus of ${line.bonusPacks} box${line.bonusPacks === 1 ? "" : "es"}`,
+            productName: line.productName,
+            actor: actorId(request),
+          }, session);
+        }
       }
       const payments = [];
       if (value.initialPaymentAmount > 0) {

@@ -115,6 +115,24 @@ function receiptPipeline(kind, match, userId, query, cursor) {
 function serializeReceipt(row, kind) {
   const payment = kind === "credit-payments";
   const sale = payment ? row.sale : row;
+  const lineBonusBoxes = Array.isArray(sale.lines)
+    ? sale.lines.reduce((total, line) => total + (Number(line?.bonusPacks) || 0), 0)
+    : 0;
+  const bonusSnapshot = sale.bonusSnapshot
+    ? {
+        ...sale.bonusSnapshot,
+        bonusBoxes: Number(sale.bonusSnapshot.bonusBoxes) || lineBonusBoxes,
+      }
+    : lineBonusBoxes > 0
+      ? {
+          enabled: true,
+          settingsVersion: 1,
+          qualifyingBoxes: 0,
+          bonusBoxes: lineBonusBoxes,
+          tier: "",
+          calculatedAt: null,
+        }
+      : undefined;
   return {
     id: String(row._id),
     kind: payment ? "credit-payment" : "sale",
@@ -124,6 +142,8 @@ function serializeReceipt(row, kind) {
     customer: sale.customer,
     company: sale.company,
     lines: payment ? [] : sale.lines,
+    bonusSnapshot: payment ? undefined : bonusSnapshot,
+    bonusDisabledReason: payment ? undefined : sale.bonusDisabledReason || "",
     payments: payment ? undefined : (row.receiptPayments || []).map((item) => ({
       receiptNumber: item.paymentReceiptNumber || "",
       date: item.date,

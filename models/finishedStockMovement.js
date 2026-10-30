@@ -4,6 +4,7 @@ const FINISHED_MOVEMENT_TYPES = [
   "Opening balance",
   "Production",
   "Sales dispatch",
+  "Sales bonus dispatch",
   "Damage/write-off",
   "Internal use/sample",
   "Other stock in",
