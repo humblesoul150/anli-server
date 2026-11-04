@@ -19,7 +19,7 @@ const rawMaterialMovementSchema = new mongoose.Schema(
     date: { type: String, required: true, match: /^\d{4}-\d{2}-\d{2}$/ },
     reference: { type: String, required: true, trim: true, maxlength: 80 },
     receiptReference: { type: String, trim: true, maxlength: 80 },
-    sourceType: { type: String, enum: ["receipt", "adjustment", "transfer", "production", "production-usage", "production-usage-correction", "opening", "migration"], required: true },
+    sourceType: { type: String, enum: ["receipt", "adjustment", "transfer", "production", "production-usage", "production-usage-correction", "opening", "migration", "physical-count"], required: true },
     sourceId: { type: mongoose.Schema.Types.ObjectId, default: null },
     idempotencyKey: { type: String, trim: true, maxlength: 120 },
     reason: { type: String, trim: true, maxlength: 300, default: "" },

@@ -43,6 +43,8 @@ const AUDIT_EVENT_TYPES = [
   "inventory.raw_material_location_configured",
   "inventory.raw_material_transferred",
   "inventory.raw_material_adjusted",
+  "inventory.raw_material_count_saved",
+  "inventory.raw_material_count_submitted",
   "inventory.production_materials_used",
   "inventory.production_material_usage_updated",
   "inventory.raw_materials_migrated",

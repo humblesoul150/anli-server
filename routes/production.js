@@ -49,6 +49,10 @@ router.post("/materials/:materialId/receipts", inventoryWriter, controller.recei
 router.get("/materials/movements", reader, controller.listRawMovements);
 router.post("/materials/transfers", inventoryWriter, controller.transferRawMaterial);
 router.post("/materials/adjustments", inventoryWriter, controller.adjustRawMaterial);
+router.get("/materials/counts", reader, controller.listRawMaterialCounts);
+router.post("/materials/counts/preview", inventoryWriter, controller.previewRawMaterialCount);
+router.post("/materials/counts/drafts", inventoryWriter, controller.saveRawMaterialCount);
+router.post("/materials/counts/submit", inventoryWriter, controller.submitRawMaterialCount);
 
 router.get("/stock/balances", reader, controller.listStockBalances);
 router.get("/stock/finished/movements", reader, controller.listFinishedMovements);

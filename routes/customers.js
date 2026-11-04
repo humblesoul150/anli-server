@@ -7,7 +7,8 @@ const { hasAnyDepartmentRole } = require("../lib/authorization");
 const router = express.Router();
 const authenticated = [authenticate, requirePasswordChanged];
 const readerRoles = ["Sales Manager", "Marketing Manager", "General Manager", "Admin"];
-const managerRoles = ["Sales Manager", "General Manager"];
+const managerRoles = ["Sales Manager", "Marketing Manager", "General Manager"];
+const archiveRoles = ["Sales Manager", "General Manager"];
 
 function requireCustomerRole(roles, reason, message) {
   return async (request, response, next) => {
@@ -34,6 +35,11 @@ const manager = requireCustomerRole(
   "customer_manage_role_required",
   "You do not have permission to manage customer records.",
 );
+const archiveManager = requireCustomerRole(
+  archiveRoles,
+  "customer_archive_role_required",
+  "You do not have permission to archive customer records.",
+);
 
 router.get("/", ...authenticated, reader, controller.listCustomers);
 router.post("/legacy-import", ...authenticated, manager, controller.importLegacyCustomers);
@@ -41,9 +47,10 @@ router.post("/", ...authenticated, manager, controller.createCustomer);
 router.get("/:id", ...authenticated, reader, controller.getCustomer);
 router.put("/:id", ...authenticated, manager, controller.updateCustomer);
 router.patch("/:id/status", ...authenticated, manager, controller.changeCustomerStatus);
-router.post("/:id/archive", ...authenticated, manager, controller.archiveCustomer);
-router.post("/:id/restore", ...authenticated, manager, controller.restoreCustomer);
+router.post("/:id/archive", ...authenticated, archiveManager, controller.archiveCustomer);
+router.post("/:id/restore", ...authenticated, archiveManager, controller.restoreCustomer);
 
 router.requireCustomerReader = reader;
 router.requireCustomerManager = manager;
+router.requireCustomerArchiveManager = archiveManager;
 module.exports = router;

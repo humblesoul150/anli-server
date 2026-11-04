@@ -129,7 +129,7 @@ test("customer role middleware allows the selected roles and audits denied acces
   try {
     for (const [role, canRead, canWrite] of [
       ["Sales Manager", true, true],
-      ["Marketing Manager", true, false],
+      ["Marketing Manager", true, true],
       ["General Manager", true, true],
       ["Admin", true, false],
       ["Super Admin", true, true],
@@ -137,12 +137,16 @@ test("customer role middleware allows the selected roles and audits denied acces
     ]) {
       let readReached = false;
       let writeReached = false;
+      let archiveReached = false;
       const readRes = response();
       const writeRes = response();
+      const archiveRes = response();
       await customerRouter.requireCustomerReader(request(role), readRes, () => { readReached = true; });
       await customerRouter.requireCustomerManager(request(role), writeRes, () => { writeReached = true; });
+      await customerRouter.requireCustomerArchiveManager(request(role), archiveRes, () => { archiveReached = true; });
       assert.equal(readReached, canRead, `${role} read`);
       assert.equal(writeReached, canWrite, `${role} write`);
+      assert.equal(archiveReached, ["Sales Manager", "General Manager", "Super Admin"].includes(role), `${role} archive`);
       if (!canRead) assert.equal(readRes.statusCode, 403);
       if (!canWrite) assert.equal(writeRes.statusCode, 403);
     }

@@ -9,6 +9,7 @@ const RawMaterial = require("../models/rawMaterial");
 const RawMaterialBalance = require("../models/rawMaterialBalance");
 const RawMaterialMovement = require("../models/rawMaterialMovement");
 const RawMaterialAlert = require("../models/rawMaterialAlert");
+const RawMaterialCount = require("../models/rawMaterialCount");
 const ProductionMaterialUsage = require("../models/productionMaterialUsage");
 const User = require("../models/user");
 const audit = require("../lib/audit");
@@ -19,10 +20,12 @@ const {
   recordFinishedStockMovement,
   recordRawMaterialMovement,
 } = require("../lib/productionInventory");
+const { cumulativePackagingConversions, convertPackageEntries } = require("../lib/rawMaterialPackaging");
 
 const PACK_SIZES = ["150 ml", "180 ml", "200 ml", "250 ml", "300 ml", "350 ml", "500 ml"];
 const PRODUCT_CATEGORIES = ["Cup", "Bottle"];
 const FLAVOURS = ["Mango", "Pineapple milk"];
+const MATERIAL_CATEGORIES = ["Ingredients", "Packaging", "Cleaning supplies", "Chemicals", "Fuel and lubricants", "Spare parts", "Maintenance materials", "General supplies"];
 const MAX_PAGE_SIZE = 200;
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 
@@ -57,6 +60,12 @@ function conflictError(message) {
   const error = new Error(message);
   error.statusCode = 409;
   return error;
+}
+
+function requireInStockForPhysicalCount(quantity) {
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    throw conflictError("Cannot count this material because it is out of stock at this location.");
+  }
 }
 
 function pageSize(value) {
@@ -195,7 +204,7 @@ function packagingConversions(material) {
 }
 
 function validateMaterialInput(body) {
-  if (!requestObject(body, ["code", "name", "category", "unit", "packagingLevels"])
+  if (!requestObject(body, ["code", "name", "category", "unit", "packagingLevels", "trackingMode"])
     || typeof body.code !== "string" || typeof body.name !== "string"
     || typeof body.unit !== "string"
     || (body.category !== undefined && typeof body.category !== "string")) {
@@ -205,13 +214,20 @@ function validateMaterialInput(body) {
   const name = body.name.trim();
   const category = String(body.category || "General").trim();
   const unit = body.unit.trim();
+  const requestedTrackingMode = body.trackingMode ?? "recipe-consumption";
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,39}$/.test(code) || !name || name.length > 160
     || !category || category.length > 80 || !unit || unit.length > 24) {
     return { error: "Material code, name, category, and unit are invalid." };
   }
+  if (!["recipe-consumption", "physical-count"].includes(requestedTrackingMode)) {
+    return { error: "Tracking mode must be recipe consumption or physical count." };
+  }
+  const trackingMode = MATERIAL_CATEGORIES.includes(category)
+    ? category === "Ingredients" ? "recipe-consumption" : "physical-count"
+    : requestedTrackingMode;
   const packaging = validatePackagingLevels(body.packagingLevels ?? [], unit);
   if (packaging.error) return packaging;
-  return { value: { code, name, category, unit, packagingLevels: packaging.value } };
+  return { value: { code, name, category, unit, packagingLevels: packaging.value, trackingMode } };
 }
 
 async function hasCurrentOrPendingRecipeUsage(materialId, session) {
@@ -478,7 +494,7 @@ async function listMaterials(_request, response) {
 async function createMaterial(request, response) {
   const validation = validateMaterialInput(request.body);
   if (validation.error) return statusError(response, 400, validation.error);
-  const { code, name, category, unit, packagingLevels } = validation.value;
+  const { code, name, category, unit, packagingLevels, trackingMode } = validation.value;
   try {
     const result = await withTransaction(async (session) => {
       const [material] = await RawMaterial.create([{
@@ -487,6 +503,7 @@ async function createMaterial(request, response) {
         category,
         unit,
         packagingLevels,
+        trackingMode,
         createdBy: actorId(request),
         updatedBy: actorId(request),
       }], { session });
@@ -629,7 +646,7 @@ async function updateMaterial(request, response) {
       const material = await RawMaterial.findById(request.params.materialId).session(session);
       if (!material) return { notFound: true };
 
-      const { code, name, category, unit, packagingLevels } = validation.value;
+      const { code, name, category, unit, packagingLevels, trackingMode } = validation.value;
       if (unit !== material.unit) {
         const [movement, balance, productRecipes] = await Promise.all([
           RawMaterialMovement.exists({ materialId: material._id }).session(session),
@@ -649,6 +666,7 @@ async function updateMaterial(request, response) {
       material.category = category;
       material.unit = unit;
       material.packagingLevels = packagingLevels;
+      material.trackingMode = trackingMode;
       material.updatedBy = actorId(request);
       await material.save({ session });
       await audit.recordAudit({
@@ -1406,6 +1424,246 @@ async function listProductionMaterialUsages(request, response) {
   return response.json({ usages: usages.map(serialize) });
 }
 
+function validateCountInput(body) {
+  const allowed = ["materialId", "location", "countDate", "packageEntries", "idempotencyKey"];
+  if (!requestObject(body, allowed)
+    || !validObjectId(body.materialId)
+    || typeof body.location !== "string" || !body.location.trim() || body.location.length > 100
+    || !validDate(body.countDate)
+    || !Array.isArray(body.packageEntries)) {
+    return { error: "Provide a valid material, location, count date, and package entries." };
+  }
+  if (!body.packageEntries.every((entry) => entry && typeof entry === "object" && typeof entry.name === "string"
+    && Number.isInteger(entry.quantity) && entry.quantity >= 0)) {
+    return { error: "Each package entry requires a valid name and a whole-number quantity." };
+  }
+  if (body.idempotencyKey !== undefined
+    && (typeof body.idempotencyKey !== "string" || !body.idempotencyKey.trim() || body.idempotencyKey.length > 120)) {
+    return { error: "Idempotency key must be 1–120 characters." };
+  }
+  return {
+    value: {
+      materialId: body.materialId,
+      location: body.location.trim(),
+      countDate: body.countDate,
+      packageEntries: body.packageEntries.map((entry) => ({ name: entry.name.trim(), quantity: entry.quantity })),
+      idempotencyKey: body.idempotencyKey?.trim(),
+    },
+  };
+}
+
+async function previewRawMaterialCount(request, response) {
+  const validation = validateCountInput(request.body);
+  if (validation.error) return statusError(response, 400, validation.error);
+  const { materialId, location, countDate, packageEntries } = validation.value;
+  const material = await RawMaterial.findOne({ _id: materialId, active: true }).lean();
+  if (!material || material.trackingMode !== "physical-count") {
+    return statusError(response, 404, "Physical-count material not found.");
+  }
+  const conversions = cumulativePackagingConversions(material);
+  if (!conversions.length && !packageEntries.length) {
+    return statusError(response, 400, "Configure packaging levels before counting this material.");
+  }
+  const countedQuantity = convertPackageEntries(packageEntries, conversions, material.unit);
+  const balance = await RawMaterialBalance.findOne({ materialId, location }).lean();
+  const expectedQuantity = balance?.quantity ?? 0;
+  return response.json({
+    materialId,
+    location,
+    countDate,
+    expectedQuantity,
+    countedQuantity,
+    variance: countedQuantity - expectedQuantity,
+    unit: material.unit,
+    packagingSnapshot: conversions,
+  });
+}
+
+async function saveRawMaterialCount(request, response) {
+  const validation = validateCountInput(request.body);
+  if (validation.error) return statusError(response, 400, validation.error);
+  const value = validation.value;
+  try {
+    const result = await withTransaction(async (session) => {
+      const material = await RawMaterial.findOne({ _id: value.materialId, active: true }).session(session);
+      if (!material || material.trackingMode !== "physical-count") return { notFound: true };
+      const conversions = cumulativePackagingConversions(material);
+      const countedQuantity = convertPackageEntries(value.packageEntries, conversions, material.unit);
+      const balance = await RawMaterialBalance.findOne({ materialId: material._id, location: value.location }).session(session).lean();
+      const expectedQuantity = balance?.quantity ?? 0;
+      const existing = await RawMaterialCount.findOne({
+        materialId: material._id,
+        location: value.location,
+        countDate: value.countDate,
+      }).session(session);
+      if (existing?.status === "submitted") {
+        throw conflictError("This material count has already been submitted.");
+      }
+      const snapshot = conversions.map((level) => ({
+        name: level.name,
+        quantity: 0,
+        baseUnitsPerPackage: level.baseUnitsPerPackage,
+      }));
+      let count;
+      if (existing) {
+        existing.packageEntries = value.packageEntries.map((entry) => {
+          const conversion = conversions.find((level) => level.name === entry.name);
+          return { ...entry, baseUnitsPerPackage: conversion?.baseUnitsPerPackage ?? 1 };
+        });
+        existing.packagingSnapshot = snapshot;
+        existing.expectedQuantity = expectedQuantity;
+        existing.countedQuantity = countedQuantity;
+        existing.variance = countedQuantity - expectedQuantity;
+        existing.updatedBy = actorId(request);
+        count = await existing.save({ session });
+      } else {
+        [count] = await RawMaterialCount.create([{
+          materialId: material._id,
+          materialName: material.name,
+          unit: material.unit,
+          location: value.location,
+          countDate: value.countDate,
+          packageEntries: value.packageEntries.map((entry) => ({
+            ...entry,
+            baseUnitsPerPackage: conversions.find((level) => level.name === entry.name)?.baseUnitsPerPackage ?? 1,
+          })),
+          packagingSnapshot: snapshot,
+          expectedQuantity,
+          countedQuantity,
+          variance: countedQuantity - expectedQuantity,
+          createdBy: actorId(request),
+          updatedBy: actorId(request),
+        }], { session });
+      }
+      await audit.recordAudit({
+        request,
+        eventType: "inventory.raw_material_count_saved",
+        outcome: "success",
+        details: { countId: String(count._id), materialId: String(material._id), countDate: value.countDate, location: value.location },
+        transaction: session,
+      });
+      return { count: serialize(count) };
+    });
+    if (result.notFound) return statusError(response, 404, "Physical-count material not found.");
+    return response.status(200).json(result);
+  } catch (error) {
+    return nextError(error, response);
+  }
+}
+
+async function submitRawMaterialCount(request, response) {
+  const validation = validateCountInput(request.body);
+  if (validation.error) return statusError(response, 400, validation.error);
+  const value = validation.value;
+  try {
+    const result = await withTransaction(async (session) => {
+      if (value.idempotencyKey) {
+        const replay = await RawMaterialCount.findOne({ idempotencyKey: value.idempotencyKey }).session(session);
+        if (replay) return { count: serialize(replay), replayed: true };
+      }
+      let count = await RawMaterialCount.findOne({
+        materialId: value.materialId,
+        location: value.location,
+        countDate: value.countDate,
+      }).session(session);
+      if (!count) {
+        const material = await RawMaterial.findOne({ _id: value.materialId, active: true }).session(session);
+        if (!material || material.trackingMode !== "physical-count") throw conflictError("Physical-count material not found.");
+        const conversions = cumulativePackagingConversions(material);
+        const snapshot = conversions.map((level) => ({ name: level.name, quantity: 0, baseUnitsPerPackage: level.baseUnitsPerPackage }));
+        [count] = await RawMaterialCount.create([{
+          materialId: material._id,
+          materialName: material.name,
+          unit: material.unit,
+          location: value.location,
+          countDate: value.countDate,
+          packageEntries: value.packageEntries.map((entry) => ({
+            ...entry,
+            baseUnitsPerPackage: conversions.find((level) => level.name === entry.name)?.baseUnitsPerPackage ?? 1,
+          })),
+          packagingSnapshot: snapshot,
+          expectedQuantity: 0,
+          countedQuantity: convertPackageEntries(value.packageEntries, conversions, material.unit),
+          variance: 0,
+          createdBy: actorId(request),
+          updatedBy: actorId(request),
+        }], { session });
+      }
+      if (count.status === "submitted") return { count: serialize(count), replayed: true };
+      const material = await RawMaterial.findOne({ _id: count.materialId, active: true }).session(session);
+      if (!material || material.trackingMode !== "physical-count") throw conflictError("Material is not available for physical counts.");
+      const conversions = cumulativePackagingConversions(material);
+      if (count.status !== "submitted") {
+        count.packageEntries = value.packageEntries.map((entry) => ({
+          ...entry,
+          baseUnitsPerPackage: conversions.find((level) => level.name === entry.name)?.baseUnitsPerPackage ?? 1,
+        }));
+      }
+      const countedQuantity = convertPackageEntries(count.packageEntries, conversions, material.unit);
+      const balance = await RawMaterialBalance.findOne({ materialId: material._id, location: value.location }).session(session).lean();
+      const expectedQuantity = balance?.quantity ?? 0;
+      requireInStockForPhysicalCount(expectedQuantity);
+      const variance = countedQuantity - expectedQuantity;
+      let adjustmentMovementId = null;
+      if (variance !== 0) {
+        const movement = await recordRawMaterialMovement({
+          materialId: material._id,
+          type: variance > 0 ? "Adjustment increase" : "Adjustment decrease",
+          direction: variance > 0 ? "in" : "out",
+          quantity: Math.abs(variance),
+          date: value.countDate,
+          reference: `COUNT-${value.countDate}-${randomUUID().slice(0, 8).toUpperCase()}`,
+          sourceType: "physical-count",
+          idempotencyKey: value.idempotencyKey,
+          reason: `End-of-day physical count variance for ${value.location}`,
+          toLocation: variance > 0 ? value.location : undefined,
+          fromLocation: variance < 0 ? value.location : undefined,
+          materialName: material.name,
+          unit: material.unit,
+          actor: actorId(request),
+        }, session);
+        adjustmentMovementId = movement._id;
+      }
+      count.status = "submitted";
+      count.expectedQuantity = expectedQuantity;
+      count.countedQuantity = countedQuantity;
+      count.variance = variance;
+      count.adjustmentMovementId = adjustmentMovementId;
+      count.idempotencyKey = value.idempotencyKey;
+      count.submittedAt = new Date();
+      count.submittedBy = actorId(request);
+      count.updatedBy = actorId(request);
+      await count.save({ session });
+      await audit.recordAudit({
+        request,
+        eventType: "inventory.raw_material_count_submitted",
+        outcome: "success",
+        details: { countId: String(count._id), variance, adjustmentMovementId: adjustmentMovementId ? String(adjustmentMovementId) : null },
+        transaction: session,
+      });
+      return { count: serialize(count), replayed: false };
+    });
+    return response.status(result.replayed ? 200 : 201).json(result);
+  } catch (error) {
+    return nextError(error, response);
+  }
+}
+
+async function listRawMaterialCounts(request, response) {
+  const filter = {};
+  if (request.query.materialId) {
+    if (!validObjectId(request.query.materialId)) return statusError(response, 400, "Material ID is invalid.");
+    filter.materialId = request.query.materialId;
+  }
+  if (request.query.location) filter.location = String(request.query.location).trim();
+  if (request.query.countDate) {
+    if (!validDate(request.query.countDate)) return statusError(response, 400, "Count date is invalid.");
+    filter.countDate = request.query.countDate;
+  }
+  const counts = await RawMaterialCount.find(filter).sort({ countDate: -1, location: 1 }).limit(pageSize(request.query.limit)).lean();
+  return response.json({ counts: counts.map(serialize) });
+}
+
 async function receiveFinishedStock(request, response) {
   return postFinishedMovement(request, response, "in");
 }
@@ -1877,8 +2135,13 @@ module.exports = {
   transferRawMaterial,
   updateMaterial,
   deleteMaterial,
+  listRawMaterialCounts,
+  previewRawMaterialCount,
+  saveRawMaterialCount,
+  submitRawMaterialCount,
   updateProduct,
   validateMaterialInput,
+  requireInStockForPhysicalCount,
   validatePackagingLevels,
   packagingConversions,
   validateReceiptInput,

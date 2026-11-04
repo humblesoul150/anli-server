@@ -14,6 +14,7 @@ const {
   validateProduct,
   calculateProducedPacks,
   validateMaterialInput,
+  requireInStockForPhysicalCount,
   validatePackagingLevels,
   packagingConversions,
   validateReceiptInput,
@@ -122,6 +123,26 @@ test("raw-material packaging validates sack and nested box conversions", () => {
     unit: "kg",
     packagingLevels: [{ name: "sack", quantity: 0 }],
   }).error, /positive finite numbers/);
+});
+
+test("raw-material category determines recipe or physical-count tracking for standard categories", () => {
+  const packaging = validateMaterialInput({
+    code: "TAPE",
+    name: "Sealing tape",
+    category: "Packaging",
+    unit: "pieces",
+    trackingMode: "recipe-consumption",
+  });
+  assert.equal(packaging.value.trackingMode, "physical-count");
+
+  const ingredient = validateMaterialInput({
+    code: "SUGAR",
+    name: "Sugar",
+    category: "Ingredients",
+    unit: "kg",
+    trackingMode: "physical-count",
+  });
+  assert.equal(ingredient.value.trackingMode, "recipe-consumption");
 });
 
 test("raw-material package receipts convert to base units and snapshot entered package data", () => {
@@ -548,4 +569,21 @@ test("production usage edits are writer-protected and auditable", () => {
   const route = productionRouter.stack.find((layer) => layer.route?.path === "/materials/production-usages/:id");
   assert.deepEqual(Object.keys(route.route.methods), ["patch"]);
   assert.ok(AUDIT_EVENT_TYPES.includes("inventory.production_material_usage_updated"));
+});
+
+test("raw-material count audit events are supported", () => {
+  assert.ok(AUDIT_EVENT_TYPES.includes("inventory.raw_material_count_saved"));
+  assert.ok(AUDIT_EVENT_TYPES.includes("inventory.raw_material_count_submitted"));
+});
+
+test("physical counts reject materials with zero stock at the selected location", () => {
+  assert.throws(
+    () => requireInStockForPhysicalCount(0),
+    { statusCode: 409, message: /out of stock/ },
+  );
+  assert.throws(
+    () => requireInStockForPhysicalCount(-1),
+    { statusCode: 409, message: /out of stock/ },
+  );
+  assert.doesNotThrow(() => requireInStockForPhysicalCount(0.01));
 });
