@@ -4,9 +4,10 @@
 
 1. Use Node.js and a MongoDB replica set or sharded cluster. Account creation and role changes use MongoDB transactions; a standalone MongoDB server is not supported.
 2. Copy `.env.example` to `.env`, set `DB_URL`, replace the example bootstrap secret with a distinct random value, and set `ALLOWED_ORIGINS` to include the exact client origin. In production, `BOOTSTRAP_SECRET` must be at least 32 characters.
-3. Start the API with `npm start` (or `npm run dev` during development). The health endpoint is `GET http://localhost:5000/health`.
-4. Configure the client `NEXT_PUBLIC_API_URL` to the API base URL, including `/api`.
-5. Set `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and `CLOUDINARY_API_SECRET` on the server to enable company-logo, employee-media, and expense-receipt uploads. Never expose these values to the client.
+3. Keep `TRUST_PROXY_HOPS=0` unless the API is reachable only through a known reverse-proxy chain. If a proxy is used, set it to the exact fixed number of trusted hops; do not expose the API through a shorter alternate network path or trust arbitrary forwarded headers.
+4. Start the API with `npm start` (or `npm run dev` during development). The health endpoint is `GET http://localhost:5000/health`.
+5. Configure the client `NEXT_PUBLIC_API_URL` to the API base URL, including `/api`.
+6. Set `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and `CLOUDINARY_API_SECRET` on the server to enable company-logo, employee-media, and expense-receipt uploads. Never expose these values to the client.
 
 For a local MongoDB installation, configure and start a replica set before running the API. For example, start `mongod` with `--replSet rs0`, then run `rs.initiate()` once in `mongosh`. Use a replica-set connection string such as `mongodb://127.0.0.1:27017/anli?replicaSet=rs0` for `DB_URL`.
 

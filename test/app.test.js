@@ -18,13 +18,27 @@ before(async () => {
 });
 
 after(async () => {
-  if (server) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  if (server)
+    await new Promise((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
 });
 
 test("health endpoint remains available", async () => {
   const response = await fetch(`${baseUrl}/health`);
   assert.equal(response.status, 200);
   assert.equal((await response.json()).status, "OK");
+});
+
+test("proxy trust is disabled by default and only enabled by configured hop count", () => {
+  assert.equal(app.get("trust proxy"), 0);
+  const proxiedApp = createApp({
+    allowedOrigins: ["http://localhost:3000"],
+    bootstrapSecret: "",
+    isProduction: false,
+    trustProxyHops: 1,
+  });
+  assert.equal(proxiedApp.get("trust proxy"), 1);
 });
 
 test("approval inbox rejects unauthenticated requests", async () => {
@@ -34,7 +48,9 @@ test("approval inbox rejects unauthenticated requests", async () => {
 });
 
 test("dashboard summary rejects unauthenticated requests", async () => {
-  const response = await fetch(`${baseUrl}/api/dashboard/summary?from=2026-10-20&to=2026-10-24`);
+  const response = await fetch(
+    `${baseUrl}/api/dashboard/summary?from=2026-10-20&to=2026-10-24`,
+  );
   assert.equal(response.status, 401);
   assert.equal((await response.json()).error, "Authentication required.");
 });
@@ -52,7 +68,8 @@ test("order reads and mutations reject unauthenticated requests", async () => {
   for (const [path, method] of requests) {
     const response = await fetch(`${baseUrl}${path}`, {
       method,
-      headers: method === "POST" ? { "Content-Type": "application/json" } : undefined,
+      headers:
+        method === "POST" ? { "Content-Type": "application/json" } : undefined,
       body: method === "POST" ? "{}" : undefined,
     });
 
@@ -61,13 +78,18 @@ test("order reads and mutations reject unauthenticated requests", async () => {
         ["/api/receipts/sales", "GET"],
         ["/api/receipts/credit-payments", "GET"],
         ["/api/receipts/sales/507f1f77bcf86cd799439011/favorite", "PATCH"],
-        ["/api/receipts/credit-payments/507f1f77bcf86cd799439011/archive", "PATCH"],
+        [
+          "/api/receipts/credit-payments/507f1f77bcf86cd799439011/archive",
+          "PATCH",
+        ],
         ["/api/receipts/bulk-export", "POST"],
       ];
       for (const [path, method] of requests) {
         const response = await fetch(`${baseUrl}${path}`, {
           method,
-          headers: ["PATCH", "POST"].includes(method) ? { "Content-Type": "application/json" } : undefined,
+          headers: ["PATCH", "POST"].includes(method)
+            ? { "Content-Type": "application/json" }
+            : undefined,
           body: ["PATCH", "POST"].includes(method) ? "{}" : undefined,
         });
         assert.equal(response.status, 401, `${method} ${path}`);
@@ -117,8 +139,10 @@ test("company profile reads and logo writes reject unauthenticated requests", as
   for (const [path, method] of requests) {
     const response = await fetch(`${baseUrl}${path}`, {
       method,
-      headers: method === "PUT" ? { "Content-Type": "application/json" } : undefined,
-      body: method === "PUT" ? JSON.stringify({ legalName: "Example" }) : undefined,
+      headers:
+        method === "PUT" ? { "Content-Type": "application/json" } : undefined,
+      body:
+        method === "PUT" ? JSON.stringify({ legalName: "Example" }) : undefined,
     });
     assert.equal(response.status, 401, `${method} ${path}`);
   }
@@ -138,7 +162,9 @@ test("employee profiles, drafts, uploads, and imports reject unauthenticated req
   for (const [path, method] of requests) {
     const response = await fetch(`${baseUrl}${path}`, {
       method,
-      headers: ["POST", "PUT"].includes(method) ? { "Content-Type": "application/json" } : undefined,
+      headers: ["POST", "PUT"].includes(method)
+        ? { "Content-Type": "application/json" }
+        : undefined,
       body: ["POST", "PUT"].includes(method) ? "{}" : undefined,
     });
     assert.equal(response.status, 401, `${method} ${path}`);
@@ -153,7 +179,8 @@ test("attendance reads and daily saves reject unauthenticated requests", async (
   for (const [path, method] of requests) {
     const response = await fetch(`${baseUrl}${path}`, {
       method,
-      headers: method === "PUT" ? { "Content-Type": "application/json" } : undefined,
+      headers:
+        method === "PUT" ? { "Content-Type": "application/json" } : undefined,
       body: method === "PUT" ? JSON.stringify({ entries: [] }) : undefined,
     });
     assert.equal(response.status, 401, `${method} ${path}`);
@@ -175,7 +202,9 @@ test("asset reads and mutations reject unauthenticated requests", async () => {
   for (const [path, method] of requests) {
     const response = await fetch(`${baseUrl}${path}`, {
       method,
-      headers: ["POST", "PATCH"].includes(method) ? { "Content-Type": "application/json" } : undefined,
+      headers: ["POST", "PATCH"].includes(method)
+        ? { "Content-Type": "application/json" }
+        : undefined,
       body: ["POST", "PATCH"].includes(method) ? "{}" : undefined,
     });
 
@@ -192,12 +221,17 @@ test("expense reads, decisions, payments, receipts, and imports reject unauthent
     ["/api/expenses/507f1f77bcf86cd799439011/decision", "POST"],
     ["/api/expenses/507f1f77bcf86cd799439011/payments", "POST"],
     ["/api/expenses/507f1f77bcf86cd799439011/attachments", "POST"],
-    ["/api/expenses/507f1f77bcf86cd799439011/attachments/attachment-id", "DELETE"],
+    [
+      "/api/expenses/507f1f77bcf86cd799439011/attachments/attachment-id",
+      "DELETE",
+    ],
   ];
   for (const [path, method] of requests) {
     const response = await fetch(`${baseUrl}${path}`, {
       method,
-      headers: ["POST", "PUT", "PATCH"].includes(method) ? { "Content-Type": "application/json" } : undefined,
+      headers: ["POST", "PUT", "PATCH"].includes(method)
+        ? { "Content-Type": "application/json" }
+        : undefined,
       body: ["POST", "PUT", "PATCH"].includes(method) ? "{}" : undefined,
     });
 
@@ -217,7 +251,9 @@ test("expense reads, decisions, payments, receipts, and imports reject unauthent
       for (const [path, method] of requests) {
         const response = await fetch(`${baseUrl}${path}`, {
           method,
-          headers: ["POST", "PATCH"].includes(method) ? { "Content-Type": "application/json" } : undefined,
+          headers: ["POST", "PATCH"].includes(method)
+            ? { "Content-Type": "application/json" }
+            : undefined,
           body: ["POST", "PATCH"].includes(method) ? "{}" : undefined,
         });
         assert.equal(response.status, 401, `${method} ${path}`);
@@ -242,7 +278,9 @@ test("customer reads, mutations, and legacy imports reject unauthenticated reque
   for (const [path, method] of requests) {
     const response = await fetch(`${baseUrl}${path}`, {
       method,
-      headers: ["POST", "PUT", "PATCH"].includes(method) ? { "Content-Type": "application/json" } : undefined,
+      headers: ["POST", "PUT", "PATCH"].includes(method)
+        ? { "Content-Type": "application/json" }
+        : undefined,
       body: ["POST", "PUT", "PATCH"].includes(method) ? "{}" : undefined,
     });
     assert.equal(response.status, 401, `${method} ${path}`);
@@ -268,7 +306,9 @@ test("leave routes reject unauthenticated reads and mutations", async () => {
   for (const [path, method] of requests) {
     const response = await fetch(`${baseUrl}${path}`, {
       method,
-      headers: ["POST", "PUT"].includes(method) ? { "Content-Type": "application/json" } : undefined,
+      headers: ["POST", "PUT"].includes(method)
+        ? { "Content-Type": "application/json" }
+        : undefined,
       body: ["POST", "PUT"].includes(method) ? "{}" : undefined,
     });
     assert.equal(response.status, 401, `${method} ${path}`);
@@ -289,7 +329,9 @@ test("disciplinary routes reject unauthenticated reads and mutations", async () 
   for (const [path, method] of requests) {
     const response = await fetch(`${baseUrl}${path}`, {
       method,
-      headers: ["POST", "PUT"].includes(method) ? { "Content-Type": "application/json" } : undefined,
+      headers: ["POST", "PUT"].includes(method)
+        ? { "Content-Type": "application/json" }
+        : undefined,
       body: ["POST", "PUT"].includes(method) ? "{}" : undefined,
     });
     assert.equal(response.status, 401, `${method} ${path}`);
@@ -312,7 +354,9 @@ test("salary advance reads and mutations reject unauthenticated requests", async
   for (const [path, method] of requests) {
     const response = await fetch(`${baseUrl}${path}`, {
       method,
-      headers: ["POST", "PUT"].includes(method) ? { "Content-Type": "application/json" } : undefined,
+      headers: ["POST", "PUT"].includes(method)
+        ? { "Content-Type": "application/json" }
+        : undefined,
       body: ["POST", "PUT"].includes(method) ? "{}" : undefined,
     });
 
@@ -328,13 +372,18 @@ test("salary advance reads and mutations reject unauthenticated requests", async
         ["/api/payroll/runs/507f1f77bcf86cd799439011/decision", "POST"],
         ["/api/payroll/runs/507f1f77bcf86cd799439011/payment", "POST"],
         ["/api/payroll/attendance-periods", "POST"],
-        ["/api/payroll/attendance-periods/2026-10-01/2026-10-31/reopen", "POST"],
+        [
+          "/api/payroll/attendance-periods/2026-10-01/2026-10-31/reopen",
+          "POST",
+        ],
         ["/api/payroll/employees/507f1f77bcf86cd799439011/payslips", "GET"],
       ];
       for (const [path, method] of requests) {
         const response = await fetch(`${baseUrl}${path}`, {
           method,
-          headers: ["POST", "PUT"].includes(method) ? { "Content-Type": "application/json" } : undefined,
+          headers: ["POST", "PUT"].includes(method)
+            ? { "Content-Type": "application/json" }
+            : undefined,
           body: ["POST", "PUT"].includes(method) ? "{}" : undefined,
         });
         assert.equal(response.status, 401, `${method} ${path}`);
@@ -362,7 +411,9 @@ test("production catalog and stock routes reject unauthenticated requests", asyn
   for (const [path, method] of requests) {
     const response = await fetch(`${baseUrl}${path}`, {
       method,
-      headers: ["POST", "PUT", "PATCH"].includes(method) ? { "Content-Type": "application/json" } : undefined,
+      headers: ["POST", "PUT", "PATCH"].includes(method)
+        ? { "Content-Type": "application/json" }
+        : undefined,
       body: ["POST", "PUT", "PATCH"].includes(method) ? "{}" : undefined,
     });
     assert.equal(response.status, 401, `${method} ${path}`);
@@ -372,14 +423,26 @@ test("production catalog and stock routes reject unauthenticated requests", asyn
 test("bootstrap endpoint is unavailable without server-side bootstrap configuration", async () => {
   const response = await fetch(`${baseUrl}/api/auth/bootstrap-super-admin`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-Bootstrap-Secret": "not-set" },
-    body: JSON.stringify({ name: "Admin", email: "admin@example.com", password: "initial-password" }),
+    headers: {
+      "Content-Type": "application/json",
+      "X-Bootstrap-Secret": "not-set",
+    },
+    body: JSON.stringify({
+      name: "Admin",
+      email: "admin@example.com",
+      password: "initial-password",
+    }),
   });
   assert.equal(response.status, 503);
 });
 
 test("credentialed CORS allows configured frontend origin only", async () => {
-  const allowed = await fetch(`${baseUrl}/health`, { headers: { Origin: "http://localhost:3000" } });
-  assert.equal(allowed.headers.get("access-control-allow-origin"), "http://localhost:3000");
+  const allowed = await fetch(`${baseUrl}/health`, {
+    headers: { Origin: "http://localhost:3000" },
+  });
+  assert.equal(
+    allowed.headers.get("access-control-allow-origin"),
+    "http://localhost:3000",
+  );
   assert.equal(allowed.headers.get("access-control-allow-credentials"), "true");
 });

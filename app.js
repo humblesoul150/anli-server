@@ -31,6 +31,7 @@ const { adminReadOnly } = require("./middleware/adminReadOnly");
 function createApp(config) {
   const app = express();
   app.locals.config = config;
+  app.set("trust proxy", config.trustProxyHops || 0);
 
   app.use(
     cors({
@@ -54,13 +55,11 @@ function createApp(config) {
   app.use("/api", adminReadOnly);
 
   app.get("/health", (_request, response) => {
-    response
-      .status(200)
-      .json({
-        status: "OK",
-        message: "server is all good and healthy",
-        timestamp: new Date().toISOString(),
-      });
+    response.status(200).json({
+      status: "OK",
+      message: "server is all good and healthy",
+      timestamp: new Date().toISOString(),
+    });
   });
 
   const authRateLimit = rateLimit({
