@@ -11,8 +11,14 @@ const userId = "507f1f77bcf86cd799439011";
 function response() {
   return {
     statusCode: 200,
-    status(code) { this.statusCode = code; return this; },
-    json(body) { this.body = body; return this; },
+    status(code) {
+      this.statusCode = code;
+      return this;
+    },
+    json(body) {
+      this.body = body;
+      return this;
+    },
   };
 }
 
@@ -35,7 +41,9 @@ test("customer schema enforces unique stable IDs and normalized names", () => {
     updatedBy: userId,
   });
   assert.equal(customer.validateSync(), undefined);
-  const uniqueIndexes = Customer.schema.indexes().filter(([, options]) => options.unique);
+  const uniqueIndexes = Customer.schema
+    .indexes()
+    .filter(([, options]) => options.unique);
   assert.ok(uniqueIndexes.some(([keys]) => keys.id === 1));
   assert.ok(uniqueIndexes.some(([keys]) => keys.nameKey === 1));
 });
@@ -47,14 +55,43 @@ test("customer validation trims and normalizes values and rejects unsupported or
   assert.equal(valid.value.email, "orders@nilefoods.ug");
   assert.equal(controller.customerNameKey(valid.value.name), "nile foods ltd");
 
-  assert.match(controller.validateCustomer(validCustomer({ name: " " })).error, /name is required/);
-  assert.match(controller.validateCustomer(validCustomer({ email: "not-an-email" })).error, /valid email/);
-  assert.match(controller.validateCustomer(validCustomer({ unexpected: true })).error, /Unsupported/);
-  assert.match(controller.validateCustomer(validCustomer({ status: "Deleted" })).error, /status is invalid/);
-  assert.match(controller.validateCustomer(validCustomer({ notes: "x".repeat(2001) })).error, /at most 2000/);
-  assert.match(controller.validateCustomer({ id: "bad/id", ...validCustomer() }, { importing: true }).error, /identifier/);
-  assert.equal(controller.validateCustomer({ status: "Inactive" }, { partial: true }).error, undefined);
-  assert.match(controller.validateCustomer({}, { partial: true }).error, /At least one/);
+  assert.match(
+    controller.validateCustomer(validCustomer({ name: " " })).error,
+    /name is required/,
+  );
+  assert.match(
+    controller.validateCustomer(validCustomer({ email: "not-an-email" })).error,
+    /valid email/,
+  );
+  assert.match(
+    controller.validateCustomer(validCustomer({ unexpected: true })).error,
+    /Unsupported/,
+  );
+  assert.match(
+    controller.validateCustomer(validCustomer({ status: "Deleted" })).error,
+    /status is invalid/,
+  );
+  assert.match(
+    controller.validateCustomer(validCustomer({ notes: "x".repeat(2001) }))
+      .error,
+    /at most 2000/,
+  );
+  assert.match(
+    controller.validateCustomer(
+      { id: "bad/id", ...validCustomer() },
+      { importing: true },
+    ).error,
+    /identifier/,
+  );
+  assert.equal(
+    controller.validateCustomer({ status: "Inactive" }, { partial: true })
+      .error,
+    undefined,
+  );
+  assert.match(
+    controller.validateCustomer({}, { partial: true }).error,
+    /At least one/,
+  );
 });
 
 test("customer serializer returns only the public profile shape", () => {
@@ -76,6 +113,94 @@ test("customer serializer returns only the public profile shape", () => {
   assert.equal(serialized.email, "");
   assert.equal("nameKey" in serialized, false);
   assert.equal("createdBy" in serialized, false);
+});
+
+test("customer keyset pagination preserves substring filters without using skip", async () => {
+  const originalFind = Customer.find;
+  const records = [
+    {
+      _id: new mongoose.Types.ObjectId("507f1f77bcf86cd799439012"),
+      createdAt: new Date("2026-10-25T10:00:00.000Z"),
+      id: "C-2",
+      name: "Nile Foods",
+      nameKey: "nile foods",
+      type: "Wholesale",
+      phone: "1",
+      email: "",
+      status: "Active",
+    },
+    {
+      _id: new mongoose.Types.ObjectId("507f1f77bcf86cd799439013"),
+      createdAt: new Date("2026-10-24T10:00:00.000Z"),
+      id: "C-3",
+      name: "Nile Market",
+      nameKey: "nile market",
+      type: "Wholesale",
+      phone: "2",
+      email: "",
+      status: "Active",
+    },
+    {
+      _id: new mongoose.Types.ObjectId("507f1f77bcf86cd799439014"),
+      createdAt: new Date("2026-10-23T10:00:00.000Z"),
+      id: "C-4",
+      name: "Nile Mart",
+      nameKey: "nile mart",
+      type: "Wholesale",
+      phone: "3",
+      email: "",
+      status: "Active",
+    },
+  ];
+  const cursor = Buffer.from(
+    JSON.stringify({
+      createdAt: "2026-10-26T10:00:00.000Z",
+      id: "507f1f77bcf86cd799439011",
+    }),
+  ).toString("base64url");
+  let queryFilter;
+  let didSkip = false;
+  Customer.find = (filter) => {
+    queryFilter = filter;
+    return {
+      sort(value) {
+        assert.deepEqual(value, { createdAt: -1, _id: -1 });
+        return this;
+      },
+      skip() {
+        didSkip = true;
+        return this;
+      },
+      limit(value) {
+        assert.equal(value, 3);
+        return this;
+      },
+      lean: async () => records,
+    };
+  };
+  try {
+    const res = response();
+    await controller.listCustomers(
+      { query: { cursor, limit: "2", search: "Nile" } },
+      res,
+    );
+    assert.ok(queryFilter.$and);
+    assert.ok(
+      queryFilter.$and.some((clause) =>
+        clause.$or?.some((part) => part.name?.$regex === "Nile"),
+      ),
+    );
+    assert.ok(
+      queryFilter.$and.some((clause) =>
+        clause.$or?.some((part) => part.createdAt?.$lt),
+      ),
+    );
+    assert.equal(didSkip, false);
+    assert.equal(res.body.customers.length, 2);
+    assert.ok(res.body.nextCursor);
+  } finally {
+    Customer.find = originalFind;
+  }
 });
 
 test("customer import skips already imported IDs and reports name collisions", async () => {
@@ -108,7 +233,10 @@ test("customer import skips already imported IDs and reports name collisions", a
     await controller.importLegacyCustomers(req, res);
     assert.equal(res.statusCode, 201);
     assert.deepEqual(res.body.existing, ["C-EXISTING"]);
-    assert.deepEqual(res.body.imported.map((item) => item.id), ["C-002"]);
+    assert.deepEqual(
+      res.body.imported.map((item) => item.id),
+      ["C-002"],
+    );
     assert.equal(res.body.rejected[0].id, "C-003");
     assert.equal(auditEvents[0].eventType, "customer.legacy_imported");
   } finally {
@@ -141,16 +269,38 @@ test("customer role middleware allows the selected roles and audits denied acces
       const readRes = response();
       const writeRes = response();
       const archiveRes = response();
-      await customerRouter.requireCustomerReader(request(role), readRes, () => { readReached = true; });
-      await customerRouter.requireCustomerManager(request(role), writeRes, () => { writeReached = true; });
-      await customerRouter.requireCustomerArchiveManager(request(role), archiveRes, () => { archiveReached = true; });
+      await customerRouter.requireCustomerReader(request(role), readRes, () => {
+        readReached = true;
+      });
+      await customerRouter.requireCustomerManager(
+        request(role),
+        writeRes,
+        () => {
+          writeReached = true;
+        },
+      );
+      await customerRouter.requireCustomerArchiveManager(
+        request(role),
+        archiveRes,
+        () => {
+          archiveReached = true;
+        },
+      );
       assert.equal(readReached, canRead, `${role} read`);
       assert.equal(writeReached, canWrite, `${role} write`);
-      assert.equal(archiveReached, ["Sales Manager", "General Manager", "Super Admin"].includes(role), `${role} archive`);
+      assert.equal(
+        archiveReached,
+        ["Sales Manager", "General Manager", "Super Admin"].includes(role),
+        `${role} archive`,
+      );
       if (!canRead) assert.equal(readRes.statusCode, 403);
       if (!canWrite) assert.equal(writeRes.statusCode, 403);
     }
-    assert.ok(denied.every((entry) => entry.eventType === "security.authorization_denied"));
+    assert.ok(
+      denied.every(
+        (entry) => entry.eventType === "security.authorization_denied",
+      ),
+    );
   } finally {
     audit.recordAudit = originalAudit;
   }

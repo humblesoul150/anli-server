@@ -1,6 +1,9 @@
 const express = require("express");
 const controller = require("../controllers/payrollController");
-const { authenticate, requirePasswordChanged } = require("../middleware/authentication");
+const {
+  authenticate,
+  requirePasswordChanged,
+} = require("../middleware/authentication");
 const audit = require("../lib/audit");
 const { hasAnyDepartmentRole } = require("../lib/authorization");
 
@@ -63,14 +66,59 @@ router.put("/policy", ...authenticated, policyWriter, controller.updatePolicy);
 router.get("/runs", ...authenticated, reader, controller.listRuns);
 router.post("/runs", ...authenticated, preparer, controller.createRun);
 router.get("/runs/:id", ...authenticated, reader, controller.getRun);
-router.post("/runs/:id/recalculate", ...authenticated, preparer, controller.recalculateRun);
-router.post("/runs/:id/submit", ...authenticated, preparer, controller.submitRun);
-router.post("/runs/:id/decision", ...authenticated, approver, controller.decideRun);
-router.post("/runs/:id/payment", ...authenticated, cashier, controller.recordPayment);
-router.get("/attendance-periods/:periodStart/:periodEnd", ...authenticated, reader, controller.getAttendancePeriod);
-router.post("/attendance-periods", ...authenticated, attendanceCloser, controller.closeAttendancePeriod);
-router.post("/attendance-periods/:periodStart/:periodEnd/reopen", ...authenticated, attendanceReopener, controller.reopenAttendancePeriod);
-router.get("/employees/:employeeId/payslips", ...authenticated, controller.listPayslips);
+router.get(
+  "/runs/:id/payslips",
+  ...authenticated,
+  reader,
+  controller.listRunPayslips,
+);
+router.post(
+  "/runs/:id/recalculate",
+  ...authenticated,
+  preparer,
+  controller.recalculateRun,
+);
+router.post(
+  "/runs/:id/submit",
+  ...authenticated,
+  preparer,
+  controller.submitRun,
+);
+router.post(
+  "/runs/:id/decision",
+  ...authenticated,
+  approver,
+  controller.decideRun,
+);
+router.post(
+  "/runs/:id/payment",
+  ...authenticated,
+  cashier,
+  controller.recordPayment,
+);
+router.get(
+  "/attendance-periods/:periodStart/:periodEnd",
+  ...authenticated,
+  reader,
+  controller.getAttendancePeriod,
+);
+router.post(
+  "/attendance-periods",
+  ...authenticated,
+  attendanceCloser,
+  controller.closeAttendancePeriod,
+);
+router.post(
+  "/attendance-periods/:periodStart/:periodEnd/reopen",
+  ...authenticated,
+  attendanceReopener,
+  controller.reopenAttendancePeriod,
+);
+router.get(
+  "/employees/:employeeId/payslips",
+  ...authenticated,
+  controller.listPayslips,
+);
 
 router.requirePayrollReader = reader;
 router.requirePayrollPreparer = preparer;

@@ -3,6 +3,7 @@ const { test } = require("node:test");
 const LegacyLeaveArchive = require("../models/legacyLeaveArchive");
 const LeavePolicy = require("../models/leavePolicy");
 const LeaveRequest = require("../models/leaveRequest");
+const leaveController = require("../controllers/leaveController");
 const {
   addBusinessDays,
   calculateWorkingDays,
@@ -46,8 +47,81 @@ test("leave models enforce references, statuses, policy defaults, and unique lin
   const policy = new LeavePolicy();
   assert.deepEqual(policy.workingDays, [1, 2, 3, 4, 5, 6]);
   assert.equal(policy.carryoverEnabled, false);
-  assert.equal(LeavePolicy.schema.path("workingDays").options.default.length, 6);
+  assert.equal(
+    LeavePolicy.schema.path("workingDays").options.default.length,
+    6,
+  );
+  assert.ok(
+    LeaveRequest.schema
+      .indexes()
+      .some(([keys]) => keys.createdAt === -1 && keys._id === -1),
+  );
+});
 
+test("leave request listing uses bounded stable cursor pagination", async () => {
+  const originalFind = LeaveRequest.find;
+  const createdAt = new Date("2026-10-25T10:00:00.000Z");
+  const firstId = "507f1f77bcf86cd799439011";
+  let filter;
+  let queryLimit;
+  const records = [
+    { _id: "507f1f77bcf86cd799439012", createdAt },
+    {
+      _id: "507f1f77bcf86cd799439013",
+      createdAt: new Date("2026-10-24T10:00:00.000Z"),
+    },
+  ];
+  LeaveRequest.find = (value) => {
+    filter = value;
+    return {
+      populate() {
+        return this;
+      },
+      sort(value) {
+        assert.deepEqual(value, { createdAt: -1, _id: -1 });
+        return this;
+      },
+      limit(value) {
+        queryLimit = value;
+        return this;
+      },
+      lean: async () => records,
+    };
+  };
+  try {
+    const response = {
+      json(body) {
+        this.body = body;
+        return this;
+      },
+    };
+    await leaveController.listLeaveRequests(
+      {
+        query: {
+          status: "Pending",
+          limit: "1",
+          cursor: Buffer.from(
+            JSON.stringify({ createdAt: createdAt.toISOString(), id: firstId }),
+          ).toString("base64url"),
+        },
+        authUser: {
+          _id: "507f1f77bcf86cd799439021",
+          roles: ["Human Resource"],
+        },
+      },
+      response,
+    );
+    assert.equal(filter.status, "Pending");
+    assert.deepEqual(filter.$or, [
+      { createdAt: { $lt: createdAt } },
+      { createdAt, _id: { $lt: firstId } },
+    ]);
+    assert.equal(queryLimit, 2);
+    assert.equal(response.body.requests.length, 1);
+    assert.ok(response.body.nextCursor);
+  } finally {
+    LeaveRequest.find = originalFind;
+  }
 });
 
 test("legacy leave records are validated and archived without granting approved status", () => {
@@ -65,8 +139,14 @@ test("legacy leave records are validated and archived without granting approved 
   const validated = validateLegacyLeave(legacy);
   assert.equal(validated.error, undefined);
   assert.equal(validated.value.originalStatus, "Approved");
-  assert.equal(legacyLeaveImportKey(validated.value), legacyLeaveImportKey(validated.value));
-  assert.match(validateLegacyLeave({ ...legacy, startDate: "2024-02-30" }).error, /valid leave dates/);
+  assert.equal(
+    legacyLeaveImportKey(validated.value),
+    legacyLeaveImportKey(validated.value),
+  );
+  assert.match(
+    validateLegacyLeave({ ...legacy, startDate: "2024-02-30" }).error,
+    /valid leave dates/,
+  );
 
   const archive = new LegacyLeaveArchive({
     ...validated.value,
@@ -76,7 +156,12 @@ test("legacy leave records are validated and archived without granting approved 
   });
   assert.equal(archive.validateSync(), undefined);
   assert.equal(archive.status, undefined);
-  assert.equal(LegacyLeaveArchive.schema.path("originalStatus").enumValues.includes("Approved"), true);
+  assert.equal(
+    LegacyLeaveArchive.schema
+      .path("originalStatus")
+      .enumValues.includes("Approved"),
+    true,
+  );
 });
 
 test("workday calculation uses configurable Mon-Sat schedule and holidays", () => {
@@ -111,12 +196,40 @@ test("annual leave balances apply capped carryover from the preceding leave year
     carryoverLimit: 5,
   };
   const requests = [
-    { leaveType: "Annual", status: "Approved", startDate: "2025-06-02", endDate: "2025-06-06" },
-    { leaveType: "Annual", status: "Approved", startDate: "2026-06-01", endDate: "2026-06-04" },
-    { leaveType: "Annual", status: "Pending", startDate: "2026-06-05", endDate: "2026-06-05" },
+    {
+      leaveType: "Annual",
+      status: "Approved",
+      startDate: "2025-06-02",
+      endDate: "2025-06-06",
+    },
+    {
+      leaveType: "Annual",
+      status: "Approved",
+      startDate: "2026-06-01",
+      endDate: "2026-06-04",
+    },
+    {
+      leaveType: "Annual",
+      status: "Pending",
+      startDate: "2026-06-05",
+      endDate: "2026-06-05",
+    },
   ];
-  const balance = await employeeBalance("employee", "Annual", "2026-06-01", requests, policy);
-  assert.deepEqual(balance, { configured: true, entitlement: 20, carryover: 5, used: 4, pending: 1, available: 20 });
+  const balance = await employeeBalance(
+    "employee",
+    "Annual",
+    "2026-06-01",
+    requests,
+    policy,
+  );
+  assert.deepEqual(balance, {
+    configured: true,
+    entitlement: 20,
+    carryover: 5,
+    used: 4,
+    pending: 1,
+    available: 20,
+  });
 });
 
 test("reminder candidates include pending and approved thresholds but exclude completed leave", () => {
@@ -161,35 +274,60 @@ test("reminder candidates include pending and approved thresholds but exclude co
     },
   };
   const candidates = getReminderCandidates(requests, policy);
-  assert.deepEqual(candidates.map((candidate) => candidate.key), [
-    "leave:pending-id:pending:2026-10-22",
-    "leave:approved-id:start-minus-7:2026-10-30",
-    "leave:approved-id:start-minus-1:2026-10-30",
-    "leave:approved-id:start:2026-10-30",
-    "leave:approved-id:return:2026-11-02",
-  ]);
-  assert.ok(candidates.every((candidate) => !candidate.key.includes("cancelled-id")));
-  assert.ok(candidates.every((candidate) => !candidate.key.includes("returned-id")));
+  assert.deepEqual(
+    candidates.map((candidate) => candidate.key),
+    [
+      "leave:pending-id:pending:2026-10-22",
+      "leave:approved-id:start-minus-7:2026-10-30",
+      "leave:approved-id:start-minus-1:2026-10-30",
+      "leave:approved-id:start:2026-10-30",
+      "leave:approved-id:return:2026-11-02",
+    ],
+  );
+  assert.ok(
+    candidates.every((candidate) => !candidate.key.includes("cancelled-id")),
+  );
+  assert.ok(
+    candidates.every((candidate) => !candidate.key.includes("returned-id")),
+  );
 });
 
 test("leave API validators reject unsafe policy and request shapes", () => {
-  assert.equal(validatePolicy({ workingDays: [1, 2, 3, 4, 5, 6] }).error, undefined);
-  assert.match(validatePolicy({ workingDays: [0, 7] }).error, /weekday numbers/);
-  assert.match(validatePolicy({ leaveYearStart: "02-31" }).error, /valid MM-DD/);
-  assert.match(validatePolicy({ carryoverEnabled: false, carryoverLimit: 2 }).error, /zero/);
-  assert.equal(validateRequestInput({
-    leaveType: "Sick",
-    reason: "Medical appointment",
-    startDate: "2026-10-22",
-    endDate: "2026-10-23",
-    handoverEmployeeId: "507f1f77bcf86cd799439012",
-  }).error, undefined);
-  assert.match(validateRequestInput({
-    leaveType: "Other",
-    otherLeaveType: "",
-    reason: "Reason",
-    startDate: "2026-02-30",
-    endDate: "2026-10-23",
-    handoverEmployeeId: "bad",
-  }).error, /Specify the other leave type/);
+  assert.equal(
+    validatePolicy({ workingDays: [1, 2, 3, 4, 5, 6] }).error,
+    undefined,
+  );
+  assert.match(
+    validatePolicy({ workingDays: [0, 7] }).error,
+    /weekday numbers/,
+  );
+  assert.match(
+    validatePolicy({ leaveYearStart: "02-31" }).error,
+    /valid MM-DD/,
+  );
+  assert.match(
+    validatePolicy({ carryoverEnabled: false, carryoverLimit: 2 }).error,
+    /zero/,
+  );
+  assert.equal(
+    validateRequestInput({
+      leaveType: "Sick",
+      reason: "Medical appointment",
+      startDate: "2026-10-22",
+      endDate: "2026-10-23",
+      handoverEmployeeId: "507f1f77bcf86cd799439012",
+    }).error,
+    undefined,
+  );
+  assert.match(
+    validateRequestInput({
+      leaveType: "Other",
+      otherLeaveType: "",
+      reason: "Reason",
+      startDate: "2026-02-30",
+      endDate: "2026-10-23",
+      handoverEmployeeId: "bad",
+    }).error,
+    /Specify the other leave type/,
+  );
 });
