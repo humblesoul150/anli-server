@@ -26,6 +26,7 @@ const orderRoutes = require("./routes/orders");
 const notificationRoutes = require("./routes/notifications");
 const approvalRoutes = require("./routes/approvals");
 const dashboardRoutes = require("./routes/dashboard");
+const uploadRoutes = require("./routes/uploads");
 const { adminReadOnly } = require("./middleware/adminReadOnly");
 
 function createApp(config) {
@@ -94,6 +95,7 @@ function createApp(config) {
   app.use("/api/notifications", notificationRoutes);
   app.use("/api/approvals", approvalRoutes);
   app.use("/api/dashboard", dashboardRoutes);
+  app.use("/api/uploads", uploadRoutes);
 
   app.use((error, _request, response, _next) => {
     if (response.headersSent) return;

@@ -6,6 +6,47 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
+function signUploadParams(options = {}) {
+  const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+  const apiKey = process.env.CLOUDINARY_API_KEY;
+  const apiSecret = process.env.CLOUDINARY_API_SECRET;
+  const timestamp = Math.floor(Date.now() / 1000);
+  const folder = options.folder || "anli/uploads";
+  const publicId = options.publicId || `upload-${timestamp}`;
+  const resourceType = options.resourceType || "image";
+  const type = options.type || "upload";
+  const allowedFormats =
+    Array.isArray(options.allowedFormats) && options.allowedFormats.length
+      ? options.allowedFormats
+      : ["jpg", "jpeg", "png", "webp", "pdf"];
+  const maxBytes =
+    Number.isFinite(options.maxBytes) && options.maxBytes > 0
+      ? Math.min(options.maxBytes, 10 * 1024 * 1024)
+      : 1024 * 1024;
+  const params = {
+    folder,
+    public_id: publicId,
+    timestamp,
+    resource_type: resourceType,
+    type,
+    allowed_formats: allowedFormats.join(","),
+    max_file_size: String(maxBytes),
+  };
+  return {
+    uploadUrl: `https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/upload`,
+    cloudName,
+    apiKey,
+    timestamp,
+    signature: cloudinary.utils.api_sign_request(params, apiSecret),
+    publicId,
+    folder,
+    resourceType,
+    type,
+    allowedFormats,
+    maxBytes,
+  };
+}
+
 function uploadImage(buffer, options = {}) {
   if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
     return Promise.reject(new TypeError("An image buffer is required."));
@@ -19,12 +60,16 @@ function uploadImage(buffer, options = {}) {
         overwrite: false,
         resource_type: "image",
         type: options.type || "upload",
-        transformation: options.transformation || [{ quality: "auto", fetch_format: "auto" }],
+        transformation: options.transformation || [
+          { quality: "auto", fetch_format: "auto" },
+        ],
       },
       (error, result) => {
         if (error) return reject(error);
         if (!result?.secure_url || !result?.public_id) {
-          return reject(new Error("Cloudinary returned an incomplete image result."));
+          return reject(
+            new Error("Cloudinary returned an incomplete image result."),
+          );
         }
         return resolve({ url: result.secure_url, publicId: result.public_id });
       },
@@ -51,7 +96,9 @@ function uploadPdf(buffer, options = {}) {
       (error, result) => {
         if (error) return reject(error);
         if (!result?.secure_url || !result?.public_id) {
-          return reject(new Error("Cloudinary returned an incomplete document result."));
+          return reject(
+            new Error("Cloudinary returned an incomplete document result."),
+          );
         }
         return resolve({ url: result.secure_url, publicId: result.public_id });
       },
@@ -62,11 +109,21 @@ function uploadPdf(buffer, options = {}) {
 
 function deleteAsset(publicId, resourceType = "image", type = "upload") {
   if (!publicId) return Promise.resolve({ result: "not found" });
-  return cloudinary.uploader.destroy(publicId, { resource_type: resourceType, type });
+  return cloudinary.uploader.destroy(publicId, {
+    resource_type: resourceType,
+    type,
+  });
 }
 
 function deleteImage(publicId) {
   return deleteAsset(publicId, "image", "upload");
 }
 
-module.exports = { cloudinary, uploadImage, uploadPdf, deleteAsset, deleteImage };
+module.exports = {
+  cloudinary,
+  uploadImage,
+  uploadPdf,
+  deleteAsset,
+  deleteImage,
+  signUploadParams,
+};

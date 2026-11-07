@@ -26,7 +26,10 @@ function createResponse() {
 }
 
 test("company profile uses one stable singleton id and stores logo metadata", () => {
-  const profile = new ProfileSettings({ legalName: "Example Ltd", logo: { url: "https://cdn.example/logo.png", publicId: "company/logo" } });
+  const profile = new ProfileSettings({
+    legalName: "Example Ltd",
+    logo: { url: "https://cdn.example/logo.png", publicId: "company/logo" },
+  });
   assert.equal(profile._id, "global");
   assert.equal(profile.legalName, "Example Ltd");
   assert.equal(profile.logo.url, "https://cdn.example/logo.png");
@@ -41,12 +44,27 @@ test("company profile updates only accept bounded known fields and valid public 
       email: "office@example.com",
       website: "https://example.com",
     }),
-    { update: { legalName: "Example Ltd", email: "office@example.com", website: "https://example.com" } },
+    {
+      update: {
+        legalName: "Example Ltd",
+        email: "office@example.com",
+        website: "https://example.com",
+      },
+    },
   );
   assert.match(validateProfileInput({ legalName: " " }).error, /required/);
-  assert.match(validateProfileInput({ email: "not-an-email" }).error, /valid company email/);
-  assert.match(validateProfileInput({ website: "javascript:alert(1)" }).error, /HTTP or HTTPS/);
-  assert.match(validateProfileInput({ publicId: "attacker-controlled" }).error, /Unsupported profile field/);
+  assert.match(
+    validateProfileInput({ email: "not-an-email" }).error,
+    /valid company email/,
+  );
+  assert.match(
+    validateProfileInput({ website: "javascript:alert(1)" }).error,
+    /HTTP or HTTPS/,
+  );
+  assert.match(
+    validateProfileInput({ publicId: "attacker-controlled" }).error,
+    /Unsupported profile field/,
+  );
 });
 
 test("company logo upload accepts only matching PNG, JPEG, and WebP signatures", () => {
@@ -60,15 +78,18 @@ test("company logo upload accepts only matching PNG, JPEG, and WebP signatures",
 });
 
 test("reusable Cloudinary helper uploads a buffer and returns only secure asset metadata", async () => {
-  const originalUploadStream = cloudinaryConfig.cloudinary.uploader.upload_stream;
+  const originalUploadStream =
+    cloudinaryConfig.cloudinary.uploader.upload_stream;
   let capturedOptions;
   cloudinaryConfig.cloudinary.uploader.upload_stream = (options, callback) => {
     capturedOptions = options;
     const stream = new PassThrough();
-    stream.on("finish", () => callback(null, {
-      secure_url: "https://res.cloudinary.com/example/image/upload/logo.webp",
-      public_id: "anli/company-profile/logo",
-    }));
+    stream.on("finish", () =>
+      callback(null, {
+        secure_url: "https://res.cloudinary.com/example/image/upload/logo.webp",
+        public_id: "anli/company-profile/logo",
+      }),
+    );
     return stream;
   };
   try {
@@ -83,7 +104,9 @@ test("reusable Cloudinary helper uploads a buffer and returns only secure asset 
     });
     assert.equal(capturedOptions.folder, "anli/company-profile");
     assert.equal(capturedOptions.public_id, "logo-id");
-    assert.deepEqual(capturedOptions.transformation, [{ width: 500, crop: "limit" }]);
+    assert.deepEqual(capturedOptions.transformation, [
+      { width: 500, crop: "limit" },
+    ]);
   } finally {
     cloudinaryConfig.cloudinary.uploader.upload_stream = originalUploadStream;
   }
@@ -112,5 +135,55 @@ test("public branding exposes only a display name and logo URL", async () => {
     assert.equal(Object.hasOwn(response.body, "tin"), false);
   } finally {
     ProfileSettings.findById = originalFindById;
+  }
+});
+
+test("direct Cloudinary metadata payloads are stored without mutating unrelated profile fields", async () => {
+  const originalFindById = ProfileSettings.findById;
+  const originalSave = ProfileSettings.prototype.save;
+  const saved = [];
+  ProfileSettings.findById = () => ({
+    lean: async () => ({
+      legalName: "Example Ltd",
+      tradingName: "Example",
+      logo: {
+        url: "https://cdn.example/old.png",
+        publicId: "company/old-logo",
+      },
+    }),
+    toObject: () => ({
+      legalName: "Example Ltd",
+      tradingName: "Example",
+      logo: {
+        url: "https://cdn.example/old.png",
+        publicId: "company/old-logo",
+      },
+    }),
+  });
+  ProfileSettings.prototype.save = async function save() {
+    saved.push(this.toObject ? this.toObject() : this);
+    return this;
+  };
+  try {
+    const response = createResponse();
+    await require("../controllers/profileSettingsController").uploadCompanyLogo(
+      {
+        body: {
+          url: "https://res.cloudinary.com/example/logo.webp",
+          publicId: "anli/company-profile/logo",
+        },
+        authUser: { _id: "user-1", name: "Test User" },
+      },
+      response,
+    );
+    assert.equal(response.statusCode, 200);
+    assert.equal(
+      response.body.logo.url,
+      "https://res.cloudinary.com/example/logo.webp",
+    );
+    assert.equal(response.body.logo.publicId, "anli/company-profile/logo");
+  } finally {
+    ProfileSettings.findById = originalFindById;
+    ProfileSettings.prototype.save = originalSave;
   }
 });
