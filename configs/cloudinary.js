@@ -23,21 +23,21 @@ function signUploadParams(options = {}) {
     Number.isFinite(options.maxBytes) && options.maxBytes > 0
       ? Math.min(options.maxBytes, 10 * 1024 * 1024)
       : 1024 * 1024;
-  const params = {
+
+  const signingParams = {
     folder,
     public_id: publicId,
     timestamp,
-    resource_type: resourceType,
     type,
     allowed_formats: allowedFormats.join(","),
-    max_file_size: String(maxBytes),
   };
+
   return {
     uploadUrl: `https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/upload`,
     cloudName,
     apiKey,
     timestamp,
-    signature: cloudinary.utils.api_sign_request(params, apiSecret),
+    signature: cloudinary.utils.api_sign_request(signingParams, apiSecret),
     publicId,
     folder,
     resourceType,

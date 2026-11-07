@@ -43,6 +43,23 @@ const EMPTY_PROFILE = {
 };
 
 async function saveWithAudit(request, details, save) {
+  if (mongoose.connection.readyState === 0) {
+    const result = await save();
+    if (result !== null && result !== undefined) {
+      try {
+        await audit.recordAudit({
+          request,
+          eventType: "company.profile_updated",
+          outcome: "success",
+          details,
+        });
+      } catch (auditError) {
+        console.warn("Unable to record profile audit when MongoDB is unavailable:", auditError.message || auditError);
+      }
+    }
+    return result;
+  }
+
   const transaction = await mongoose.startSession();
   let result;
   try {
@@ -166,36 +183,67 @@ function detectImageType(buffer) {
 }
 
 async function uploadCompanyLogo(request, response) {
-  const file = request.file;
-  if (!file) return response.status(400).json({ error: "Choose a PNG, JPEG, or WebP logo image." });
-  if (!["image/png", "image/jpeg", "image/webp"].includes(file.mimetype) || detectImageType(file.buffer) !== file.mimetype) {
-    return response.status(400).json({ error: "The uploaded file is not a valid PNG, JPEG, or WebP image." });
+  let newLogo;
+  let replacedPublicId;
+
+  if (request.file) {
+    const file = request.file;
+    if (!file) return response.status(400).json({ error: "Choose a PNG, JPEG, or WebP logo image." });
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.mimetype) || detectImageType(file.buffer) !== file.mimetype) {
+      return response.status(400).json({ error: "The uploaded file is not a valid PNG, JPEG, or WebP image." });
+    }
+
+    newLogo = await uploadImage(file.buffer, {
+      folder: "anli/company-profile",
+      publicId: `logo-${randomUUID()}`,
+      transformation: [{ width: 500, height: 500, crop: "limit", quality: "auto", fetch_format: "auto" }],
+    });
+  } else {
+    const bodyLogo = request.body?.logo ?? request.body ?? {};
+    const url = typeof bodyLogo.url === "string" ? bodyLogo.url.trim() : "";
+    const publicId = typeof bodyLogo.publicId === "string" ? bodyLogo.publicId.trim() : "";
+    if (!url || !publicId) {
+      return response.status(400).json({ error: "A valid Cloudinary logo URL and publicId are required." });
+    }
+    try {
+      const parsed = new URL(url);
+      if (!['http:', 'https:'].includes(parsed.protocol)) {
+        throw new Error("invalid protocol");
+      }
+    } catch {
+      return response.status(400).json({ error: "The logo URL must be a valid HTTP or HTTPS URL." });
+    }
+    newLogo = { url, publicId };
   }
 
-  const newLogo = await uploadImage(file.buffer, {
-    folder: "anli/company-profile",
-    publicId: `logo-${randomUUID()}`,
-    transformation: [{ width: 500, height: 500, crop: "limit", quality: "auto", fetch_format: "auto" }],
-  });
-  let replacedPublicId;
   let profile;
   try {
     profile = await saveWithAudit(
       request,
       { changedFields: [], logoChanged: true },
       async (transaction) => {
-        const document = await ProfileSettings.findById(PROFILE_ID).session(transaction)
-          || new ProfileSettings({ _id: PROFILE_ID });
+        let document = await ProfileSettings.findById(PROFILE_ID);
+        if (transaction && typeof document?.session === "function") {
+          document = await document.session(transaction);
+        }
+        if (!document) {
+          document = new ProfileSettings({ _id: PROFILE_ID });
+        } else if (typeof document.save !== "function") {
+          const snapshot = typeof document.toObject === "function" ? document.toObject() : document;
+          document = new ProfileSettings({ _id: PROFILE_ID, ...snapshot });
+        }
         replacedPublicId = document.logo?.publicId;
         document.logo = newLogo;
         return document.save({ session: transaction });
       },
     );
   } catch (error) {
-    try {
-      await deleteImage(newLogo.publicId);
-    } catch (cleanupError) {
-      console.error("Unable to clean up an unreferenced company logo:", cleanupError);
+    if (request.file && newLogo?.publicId) {
+      try {
+        await deleteImage(newLogo.publicId);
+      } catch (cleanupError) {
+        console.error("Unable to clean up an unreferenced company logo:", cleanupError);
+      }
     }
     throw error;
   }
@@ -217,7 +265,15 @@ async function removeCompanyLogo(request, response) {
     request,
     { changedFields: [], logoChanged: true, logoRemoved: true },
     async (transaction) => {
-      const document = await ProfileSettings.findById(PROFILE_ID).session(transaction);
+      let document = await ProfileSettings.findById(PROFILE_ID);
+      if (transaction && typeof document?.session === "function") {
+        document = await document.session(transaction);
+      }
+      if (!document) return null;
+      if (typeof document.save !== "function") {
+        const snapshot = typeof document.toObject === "function" ? document.toObject() : document;
+        document = new ProfileSettings({ _id: PROFILE_ID, ...snapshot });
+      }
       if (!document?.logo?.publicId) return null;
       previousPublicId = document.logo.publicId;
       document.logo = { url: "", publicId: "" };

@@ -3,7 +3,7 @@ const { test } = require("node:test");
 const { PassThrough } = require("node:stream");
 const cloudinaryConfig = require("../configs/cloudinary");
 const ProfileSettings = require("../models/profileSettings");
-const { uploadImage } = cloudinaryConfig;
+const { signUploadParams, uploadImage } = cloudinaryConfig;
 const {
   detectImageType,
   getPublicBrand,
@@ -75,6 +75,57 @@ test("company logo upload accepts only matching PNG, JPEG, and WebP signatures",
   assert.equal(detectImageType(jpeg), "image/jpeg");
   assert.equal(detectImageType(webp), "image/webp");
   assert.equal(detectImageType(Buffer.from("<svg></svg>")), null);
+});
+
+test("signed Cloudinary upload params omit form-only fields from the signature payload", () => {
+  const originalApiSignRequest =
+    cloudinaryConfig.cloudinary.utils.api_sign_request;
+  const originalDateNow = Date.now;
+  const originalCloudName = process.env.CLOUDINARY_CLOUD_NAME;
+  const originalApiKey = process.env.CLOUDINARY_API_KEY;
+  const originalSecret = process.env.CLOUDINARY_API_SECRET;
+  process.env.CLOUDINARY_CLOUD_NAME = "demo";
+  process.env.CLOUDINARY_API_KEY = "demo-key";
+  process.env.CLOUDINARY_API_SECRET = "test-secret";
+  Date.now = () => 1_234_567_890 * 1000;
+  cloudinaryConfig.cloudinary.utils.api_sign_request = (params, apiSecret) => {
+    assert.equal(apiSecret, "test-secret");
+    assert.deepEqual(params, {
+      folder: "anli/company-profile",
+      public_id: "logo-123",
+      timestamp: 1_234_567_890,
+      type: "upload",
+      allowed_formats: "png,jpeg,webp",
+    });
+    return "signed-params";
+  };
+
+  try {
+    const signed = signUploadParams({
+      folder: "anli/company-profile",
+      publicId: "logo-123",
+      resourceType: "image",
+      type: "upload",
+      maxBytes: 2 * 1024 * 1024,
+      allowedFormats: ["png", "jpeg", "webp"],
+    });
+
+    assert.equal(signed.signature, "signed-params");
+    assert.equal(signed.maxBytes, 2 * 1024 * 1024);
+    assert.equal(signed.resourceType, "image");
+    assert.equal(
+      signed.uploadUrl,
+      "https://api.cloudinary.com/v1_1/demo/image/upload",
+    );
+  } finally {
+    cloudinaryConfig.cloudinary.utils.api_sign_request = originalApiSignRequest;
+    if (originalCloudName === undefined) delete process.env.CLOUDINARY_CLOUD_NAME;
+    else process.env.CLOUDINARY_CLOUD_NAME = originalCloudName;
+    if (originalApiKey === undefined) delete process.env.CLOUDINARY_API_KEY;
+    else process.env.CLOUDINARY_API_KEY = originalApiKey;
+    if (originalSecret === undefined) delete process.env.CLOUDINARY_API_SECRET;
+    else process.env.CLOUDINARY_API_SECRET = originalSecret;
+  }
 });
 
 test("reusable Cloudinary helper uploads a buffer and returns only secure asset metadata", async () => {
